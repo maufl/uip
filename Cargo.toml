@@ -1,0 +1,15 @@
+[package]
+name = "uip"
+version = "0.1.0"
+authors = ["Felix Konstantin Maurer <maufl@maufl.de>"]
+
+[dependencies]
+interfaces = "0.0.2"
+igd = "0.6.0"
+futures = "0.1"
+tokio-io = "0.1"
+rustls = "0.8"
+tokio-core = "0.1"
+tokio-rustls = "0.2"
+webpki-roots = "0.10"
+tokio-file-unix = "0.4"
