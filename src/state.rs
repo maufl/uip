@@ -1,6 +1,6 @@
 use std::net::{SocketAddr};
 use std::collections::HashMap;
-use std::sync::{Arc,RwLock};
+use std::sync::{Arc,RwLock,Mutex};
 use igd::{search_gateway_from,PortMappingProtocol};
 use interfaces::{Interface,Kind};
 use futures::{Future,IntoFuture};
@@ -10,6 +10,8 @@ use tokio_io::{AsyncRead,AsyncWrite};
 use tokio_rustls::{ClientConfigExt,TlsStream};
 use tokio_core::reactor::{Core,Handle};
 use std::error::Error;
+
+use connection::{Connection,SharedConnection};
 
 pub struct Peer {
     id: String,
@@ -70,7 +72,7 @@ trait AsyncStream: AsyncRead + AsyncWrite {
 pub struct State {
     pub id: String,
     pub pib: Arc<RwLock<PeerInformationBase>>,
-    connections: Arc<RwLock<HashMap<String, Vec<Box<AsyncStream>>>>>,
+    connections: Arc<RwLock<HashMap<String, Vec<SharedConnection>>>>,
     pub relays: Arc<RwLock<Vec<String>>>,
     addresses: Arc<RwLock<Vec<LocalAddress>>>,
     core: Core,
@@ -131,7 +133,19 @@ impl State {
         }
     }
 
-    fn connect(&self, id: String) -> impl Future<Item=TlsStream<TcpStream,ClientSession>, Error=String> {
+    fn add_connection(&self, id: &String, conn: SharedConnection) -> Result<SharedConnection, String> {
+        let connections = match self.connections.write() {
+            Ok(conns) => conns,
+            Err(_) => return Err("Failed to acquire lock for connections".to_owned())
+        };
+        match connections.get_mut(&id) {
+            Some(vec) => { vec.push(conn); }
+            None => { connections.insert(id.clone(), vec![conn]); }
+        };
+        Ok(conn)
+    }
+
+    fn connect(&self, id: String) -> impl Future<Item=SharedConnection, Error=String> {
         self.lookup_peer(&id).ok_or("Failed to find peer information".to_owned())
             .and_then(|(addr, cert)| {
                 Ok((addr, cert, self.core.handle()))
@@ -146,7 +160,11 @@ impl State {
                 };
                 TcpStream::connect(&addr, &handle)
                     .and_then(move |stream| config.connect_async(id.as_ref(), stream) )
+                    .and_then(move |stream| Arc::new(Mutex::new(Connection::from_tls_client(stream))) )
                     .map_err(|err| err.description().to_owned() )
+            })
+            .and_then(|conn| {
+                self.add_connection(&id, conn)
             })
     }
 }

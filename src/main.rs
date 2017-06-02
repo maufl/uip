@@ -16,7 +16,7 @@ use std::sync::{Arc,RwLock};
 use std::net::{SocketAddr,SocketAddrV4,Ipv4Addr};
 use std::str::FromStr;
 
-
+mod connection;
 mod state;
 use state::{State,Peer};
 
