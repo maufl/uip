@@ -1,6 +1,6 @@
 use std::net::{SocketAddr};
 use std::collections::HashMap;
-use std::sync::{Arc,RwLock,Mutex};
+use std::sync::{Arc,RwLock,Mutex,RwLockReadGuard,RwLockWriteGuard};
 use igd::{search_gateway_from,PortMappingProtocol};
 use interfaces::{Interface,Kind};
 use futures::{Future,IntoFuture,future};
@@ -72,37 +72,43 @@ trait AsyncStream: AsyncRead + AsyncWrite {
 
 pub struct InnerState {
     pub id: String,
-    pub pib: Arc<RwLock<PeerInformationBase>>,
-    connections: Arc<RwLock<HashMap<String, Vec<SharedConnection>>>>,
-    pub relays: Arc<RwLock<Vec<String>>>,
-    addresses: Arc<RwLock<Vec<LocalAddress>>>,
+    pub pib: PeerInformationBase,
+    connections: HashMap<String, Vec<SharedConnection>>,
+    pub relays: Vec<String>,
+    addresses: Vec<LocalAddress>,
     core: Core,
 }
 
-pub struct State(Arc<InnerState>);
-
+#[derive(Clone)]
+pub struct State(pub Arc<RwLock<InnerState>>);
 
 impl State {
     pub fn new(id: String) -> State {
-        State(Arc::new(InnerState {
+        State(Arc::new(RwLock::new(InnerState {
             id: id,
-            pib: Arc::new(RwLock::new(PeerInformationBase::new())),
-            connections: Arc::new(RwLock::new(HashMap::new())),
-            relays: Arc::new(RwLock::new(Vec::new())),
-            addresses: Arc::new(RwLock::new(Vec::new())),
+            pib: PeerInformationBase::new(),
+            connections: HashMap::new(),
+            relays: Vec::new(),
+            addresses: Vec::new(),
             core: Core::new().unwrap(),
-        }))
+        })))
+    }
+
+    pub fn read(&self) -> RwLockReadGuard<InnerState> {
+        self.0.read().expect("Unable to acquire read lock on state")
+    }
+
+    pub fn write(&self) -> RwLockWriteGuard<InnerState> {
+        self.0.write().expect("Unable to acquire write lock on state")
     }
 
     fn discover_addresses(&self) -> () {
+        let mut state = self.write();
         let interfaces = match Interface::get_all()  {
             Ok(i) => i,
             Err(_) => return,
         };
-        self.0.addresses
-            .write()
-            .expect("Unable to acquire write lock")
-            .clear();
+        state.addresses.clear();
         for interface in interfaces {
             if interface.is_loopback() || !interface.is_up() {
                 continue
@@ -113,9 +119,7 @@ impl State {
                     None => continue,
                 };
                 if address.kind == Kind::Ipv4 || address.kind == Kind::Ipv6 {
-                    self.0.addresses
-                        .write()
-                        .expect("Unable to acquire write lock.")
+                    state.addresses
                         .push(LocalAddress::new(interface.name.clone(), addr, None))
                 }
             }
@@ -123,8 +127,7 @@ impl State {
     }
 
     fn lookup_peer(&self, id: &String) -> Option<(SocketAddr, Certificate)> {
-        self.0.pib
-            .read().expect("Failed to acquire read lock for peer information base")
+        self.read().pib
             .get_peer(id)
             .and_then(|peer| {
                 if peer.addresses.len() > 0 {
@@ -136,27 +139,29 @@ impl State {
     }
 
     fn connect_to_relays(&self) {
-        for relay in self.0.relays.read().expect("Failed to acquire read lock for relay list").into_iter() {
+        for relay in self.read().relays.iter() {
             let (addr, cert) = match self.lookup_peer(&relay) {
                 Some(info) => info,
                 None => continue
             };
+            let relay = relay.clone();
+            let relay2 = relay.clone();
+            let state = self.clone();
             let future = self.connect(relay.clone(), addr, cert)
-                .and_then(move |conn| { let state = self.clone(); future::ok(state.add_connection(relay.clone(), conn)) } )
-                .map_err(move |err| println!("Unable to connect to peer {}", relay.clone()) );
-            self.0.core.handle().spawn(future);
+                .and_then(move |conn| future::ok(state.add_connection(relay, conn)) )
+                .map_err(move |err| println!("Unable to connect to peer {}", relay2) );
+            self.0.read().expect("Unable to acquire read lock").core.handle().spawn(future);
         }
     }
 
     fn add_connection(&self, id: String, conn: SharedConnection) {
-        self.0.connections
-            .write().expect("Failed to acquire write lock for connections map")
-            .entry(id).or_insert(vec![])
+        self.write()
+            .connections.entry(id).or_insert(vec![])
             .push(conn);
     }
 
     fn connect(&self, id: String, addr: SocketAddr, cert: Certificate) -> impl Future<Item=SharedConnection, Error=io::Error> {
-        let handle = self.0.core.handle();
+        let handle = self.read().core.handle();
         let config = {
             let mut config = ClientConfig::new();
             config.versions = vec![ProtocolVersion::TLSv1_2];

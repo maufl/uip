@@ -40,9 +40,9 @@ fn main() {
     let addr = "127.0.0.1:4433".to_socket_addrs().unwrap().next().unwrap();
     let cert = load_certs("rsa/ca.cert").pop().unwrap();
     let state = State::new("test".to_string());
-    state.relays.write().expect("Unable to acquire lock").push("testserver.com".to_string());
-    state.pib
-        .write().expect("Unable to acquire lock")
+    state.0.write().expect("Unable to acquire lock").relays.push("testserver.com".to_string());
+    state.0.write().expect("Unable to acquire lock")
+        .pib
         .add_peer("testserver.com".to_string(), Peer::new("testserver.com".to_string(), vec![addr], vec![], cert.clone()));
     let mut core = Core::new().unwrap();
     let handle = core.handle();
