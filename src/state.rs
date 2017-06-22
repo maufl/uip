@@ -2,12 +2,12 @@ use std::net::{SocketAddr};
 use std::collections::HashMap;
 use std::sync::{Arc,RwLock,Mutex,RwLockReadGuard,RwLockWriteGuard};
 use interfaces::{Interface,Kind};
-use futures::{Future,future};
+use futures::{Future,Poll,Async,future};
 use tokio_core::net::TcpStream;
 use rustls::{ClientConfig,Certificate,ProtocolVersion};
 use tokio_io::{AsyncRead,AsyncWrite};
 use tokio_rustls::{ClientConfigExt};
-use tokio_core::reactor::{Core};
+use tokio_core::reactor::{Handle};
 use std::io;
 
 use connection::{Connection,SharedConnection};
@@ -60,7 +60,7 @@ impl PeerInformationBase {
         self.peers.insert(id, peer);
     }
 
-    pub fn get_peer(&self, id: &String) -> Option<&Peer> {
+    pub fn get_peer(&self, id: &str) -> Option<&Peer> {
         self.peers.get(id)
     }
 }
@@ -74,21 +74,21 @@ pub struct InnerState {
     connections: HashMap<String, Vec<SharedConnection>>,
     pub relays: Vec<String>,
     addresses: Vec<LocalAddress>,
-    core: Core,
+    handle: Handle,
 }
 
 #[derive(Clone)]
 pub struct State(pub Arc<RwLock<InnerState>>);
 
 impl State {
-    pub fn new(id: String) -> State {
+    pub fn new(id: String, handle: Handle) -> State {
         State(Arc::new(RwLock::new(InnerState {
             id: id,
             pib: PeerInformationBase::new(),
             connections: HashMap::new(),
             relays: Vec::new(),
             addresses: Vec::new(),
-            core: Core::new().unwrap(),
+            handle: handle,
         })))
     }
 
@@ -111,7 +111,7 @@ impl State {
             if interface.is_loopback() || !interface.is_up() {
                 continue
             }
-            for address in interface.addresses.iter() {
+            for address in &interface.addresses {
                 let addr = match address.addr {
                     Some(addr) => addr,
                     None => continue,
@@ -124,12 +124,12 @@ impl State {
         };
     }
 
-    fn lookup_peer(&self, id: &String) -> Option<(SocketAddr, Certificate)> {
+    fn lookup_peer(&self, id: &str) -> Option<(SocketAddr, Certificate)> {
         self.read().pib
             .get_peer(id)
             .and_then(|peer| {
-                if peer.addresses.len() > 0 {
-                    Some( (peer.addresses[0].clone(), peer.user_certificate.clone()) )
+                if !peer.addresses.is_empty() {
+                    Some( (peer.addresses[0], peer.user_certificate.clone()) )
                 } else {
                     None
                 }
@@ -137,8 +137,8 @@ impl State {
     }
 
     fn connect_to_relays(&self) {
-        for relay in self.read().relays.iter() {
-            let (addr, cert) = match self.lookup_peer(&relay) {
+        for relay in &self.read().relays {
+            let (addr, cert) = match self.lookup_peer(relay) {
                 Some(info) => info,
                 None => continue
             };
@@ -148,18 +148,18 @@ impl State {
             let future = self.connect(relay.clone(), addr, cert)
                 .and_then(move |conn| future::ok(state.add_connection(relay, conn)) )
                 .map_err(move |err| println!("Unable to connect to peer {}: {}", relay2, err) );
-            self.read().core.handle().spawn(future);
+            self.read().handle.spawn(future);
         }
     }
 
     fn add_connection(&self, id: String, conn: SharedConnection) {
         self.write()
-            .connections.entry(id).or_insert(vec![])
+            .connections.entry(id).or_insert_with(Vec::new)
             .push(conn);
     }
 
     fn connect(&self, id: String, addr: SocketAddr, cert: Certificate) -> impl Future<Item=SharedConnection, Error=io::Error> {
-        let handle = self.read().core.handle();
+        let handle = self.read().handle.clone();
         let config = {
             let mut config = ClientConfig::new();
             config.versions = vec![ProtocolVersion::TLSv1_2];
@@ -179,11 +179,15 @@ impl State {
     pub fn add_relay(&self, address: String) {
         self.write().relays.push(address)
     }
+}
 
-    pub fn run(&self) {
+impl Future for State {
+    type Item = ();
+    type Error = ();
+
+    fn poll(&mut self) -> Poll<(), ()> {
         self.discover_addresses();
         self.connect_to_relays();
-        let _ = self.write().core.run(future::empty::<(),()>());
+        Ok(Async::NotReady)
     }
 }
- 

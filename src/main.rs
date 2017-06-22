@@ -18,17 +18,20 @@ use rustls::{Certificate};
 use rustls::internal::pemfile::{ certs };
 use std::net::ToSocketAddrs;
 use std::io::{ BufReader };
+use tokio_core::reactor::{Core};
 
 fn load_certs(path: &str) -> Vec<Certificate> {
     certs(&mut BufReader::new(std::fs::File::open(path).unwrap())).unwrap()
 }
 
 fn main() {
+    let mut core = Core::new().unwrap();
     let addr = "127.0.0.1:4433".to_socket_addrs().unwrap().next().unwrap();
     let cert = load_certs("rsa/ca.cert").pop().unwrap();
-    let state = State::new("test".to_string());
+    let state = State::new("test".to_string(), core.handle());
     state.add_relay("testserver.com".to_string());
     state.add_relay_peer("testserver.com".to_string(), addr, cert.clone());
-    state.run();
+
+    core.run(state).unwrap();
 }
 
