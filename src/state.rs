@@ -1,15 +1,13 @@
 use std::net::{SocketAddr};
 use std::collections::HashMap;
 use std::sync::{Arc,RwLock,Mutex,RwLockReadGuard,RwLockWriteGuard};
-use igd::{search_gateway_from,PortMappingProtocol};
 use interfaces::{Interface,Kind};
-use futures::{Future,IntoFuture,future};
+use futures::{Future,future};
 use tokio_core::net::TcpStream;
-use rustls::{Session,ClientConfig,Certificate,ProtocolVersion,ClientSession};
+use rustls::{ClientConfig,Certificate,ProtocolVersion};
 use tokio_io::{AsyncRead,AsyncWrite};
-use tokio_rustls::{ClientConfigExt,TlsStream};
-use tokio_core::reactor::{Core,Handle};
-use std::error::Error;
+use tokio_rustls::{ClientConfigExt};
+use tokio_core::reactor::{Core};
 use std::io;
 
 use connection::{Connection,SharedConnection};
@@ -38,16 +36,16 @@ pub struct PeerInformationBase {
 
 struct LocalAddress {
     interface: String,
-    internalAddress: SocketAddr,
-    externalAddress: Option<SocketAddr>,
+    internal_address: SocketAddr,
+    external_address: Option<SocketAddr>,
 }
 
 impl LocalAddress {
-    fn new<S: Into<String>>(interface: S, internalAddress: SocketAddr, externalAddress: Option<SocketAddr>) -> LocalAddress {
+    fn new<S: Into<String>>(interface: S, internal_address: SocketAddr, external_address: Option<SocketAddr>) -> LocalAddress {
         LocalAddress {
             interface: interface.into(),
-            internalAddress: internalAddress,
-            externalAddress: externalAddress,
+            internal_address: internal_address,
+            external_address: external_address,
         }
     }
 }
@@ -94,11 +92,11 @@ impl State {
         })))
     }
 
-    pub fn read(&self) -> RwLockReadGuard<InnerState> {
+    fn read(&self) -> RwLockReadGuard<InnerState> {
         self.0.read().expect("Unable to acquire read lock on state")
     }
 
-    pub fn write(&self) -> RwLockWriteGuard<InnerState> {
+    fn write(&self) -> RwLockWriteGuard<InnerState> {
         self.0.write().expect("Unable to acquire write lock on state")
     }
 
@@ -149,8 +147,8 @@ impl State {
             let state = self.clone();
             let future = self.connect(relay.clone(), addr, cert)
                 .and_then(move |conn| future::ok(state.add_connection(relay, conn)) )
-                .map_err(move |err| println!("Unable to connect to peer {}", relay2) );
-            self.0.read().expect("Unable to acquire read lock").core.handle().spawn(future);
+                .map_err(move |err| println!("Unable to connect to peer {}: {}", relay2, err) );
+            self.read().core.handle().spawn(future);
         }
     }
 
@@ -165,12 +163,27 @@ impl State {
         let config = {
             let mut config = ClientConfig::new();
             config.versions = vec![ProtocolVersion::TLSv1_2];
-            config.root_store.add(&cert);
+            let _ = config.root_store.add(&cert);
             Arc::new(config)
         };
         TcpStream::connect(&addr, &handle)
             .and_then(move |stream| config.connect_async(id.as_ref(), stream) )
             .and_then(|stream| Ok(Arc::new(Mutex::new(Connection::from_tls_client(stream)))) )
+    }
+
+    pub fn add_relay_peer(&self,  name: String, address: SocketAddr, cert: Certificate) {
+        self.write().pib
+            .add_peer(name.clone(), Peer::new(name, vec![address], vec![], cert));
+    }
+
+    pub fn add_relay(&self, address: String) {
+        self.write().relays.push(address)
+    }
+
+    pub fn run(&self) {
+        self.discover_addresses();
+        self.connect_to_relays();
+        let _ = self.write().core.run(future::empty::<(),()>());
     }
 }
  

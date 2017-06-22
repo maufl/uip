@@ -1,7 +1,7 @@
-use tokio_rustls::{ClientConfigExt,TlsStream};
+use tokio_rustls::{TlsStream};
 use std::sync::{Arc,Mutex};
 use tokio_core::net::TcpStream;
-use rustls::{Session,ClientConfig,Certificate,ProtocolVersion,ServerSession,ClientSession};
+use rustls::{ServerSession,ClientSession};
 use tokio_io::{AsyncRead,AsyncWrite};
 use std::io::{Read,Write};
 
