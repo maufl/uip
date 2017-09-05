@@ -5,34 +5,12 @@ use interfaces::{Interface,Kind};
 use futures::{Future,Poll,Async,future};
 use tokio_core::net::TcpStream;
 use rustls::{ClientConfig,Certificate,ProtocolVersion};
-use tokio_io::{AsyncRead,AsyncWrite};
 use tokio_rustls::{ClientConfigExt};
 use tokio_core::reactor::{Handle};
 use std::io;
 
 use connection::{Connection,SharedConnection};
-
-pub struct Peer {
-    id: String,
-    addresses: Vec<SocketAddr>,
-    relays: Vec<String>,
-    user_certificate: Certificate,
-}
-
-impl Peer {
-    pub fn new(id: String, addresses: Vec<SocketAddr>, relays: Vec<String>, cert: Certificate) -> Peer {
-        Peer {
-            id: id,
-            addresses: addresses,
-            relays: relays,
-            user_certificate: cert,
-        }
-    }
-}
-
-pub struct PeerInformationBase {
-    peers: HashMap<String, Peer>
-}
+use peer_information_base::{Peer,PeerInformationBase};
 
 struct LocalAddress {
     interface: String,
@@ -48,24 +26,6 @@ impl LocalAddress {
             external_address: external_address,
         }
     }
-}
-impl PeerInformationBase {
-    fn new() -> PeerInformationBase {
-        PeerInformationBase {
-            peers: HashMap::new()
-        }
-    }
-
-    pub fn add_peer(&mut self, id: String, peer: Peer) {
-        self.peers.insert(id, peer);
-    }
-
-    pub fn get_peer(&self, id: &str) -> Option<&Peer> {
-        self.peers.get(id)
-    }
-}
-
-trait AsyncStream: AsyncRead + AsyncWrite {
 }
 
 pub struct InnerState {
@@ -143,11 +103,10 @@ impl State {
                 None => continue
             };
             let relay = relay.clone();
-            let relay2 = relay.clone();
-            let state = self.clone();
+            println!("Connecting to relay {}", relay);
             let future = self.connect(relay.clone(), addr, cert)
-                .and_then(move |conn| future::ok(state.add_connection(relay, conn)) )
-                .map_err(move |err| println!("Unable to connect to peer {}: {}", relay2, err) );
+                .and_then(|_| future::ok(()) )
+                .map_err(move |err| println!("Unable to connect to peer {}: {}", relay, err) );
             self.read().handle.spawn(future);
         }
     }
@@ -166,9 +125,15 @@ impl State {
             let _ = config.root_store.add(&cert);
             Arc::new(config)
         };
+        let state = self.clone();
+        let id2 = id.clone();
         TcpStream::connect(&addr, &handle)
             .and_then(move |stream| config.connect_async(id.as_ref(), stream) )
-            .and_then(|stream| Ok(Arc::new(Mutex::new(Connection::from_tls_client(stream)))) )
+            .and_then(move |stream| {
+                let conn = SharedConnection::from_tls_client(stream);
+                state.add_connection(id2, conn.clone());
+                Ok(conn)
+            })
     }
 
     pub fn add_relay_peer(&self,  name: String, address: SocketAddr, cert: Certificate) {
@@ -178,6 +143,14 @@ impl State {
 
     pub fn add_relay(&self, address: String) {
         self.write().relays.push(address)
+    }
+
+    pub fn send_to(&self, id: String, data: Vec<u8>) {
+        if let Some(connections) =  self.read().connections.get(&id) {
+            if let Some(connection) = connections.first() {
+                connection.write_async(data)
+            }
+        }
     }
 }
 

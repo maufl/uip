@@ -5,7 +5,9 @@ authors = ["Felix Konstantin Maurer <maufl@maufl.de>"]
 
 [dependencies]
 interfaces = "0.0.2"
+bytes = "0.4.4"
 igd = "0.6.0"
+async-readline = { git = "https://github.com/dpc/async-readline" } 
 futures = "0.1"
 tokio-io = "0.1"
 rustls = "0.8"
