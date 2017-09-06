@@ -42,10 +42,13 @@ fn main() {
     let arc_config = Arc::new(config);
 
     let socket = TcpListener::bind(&addr, &handle).unwrap();
+    println!("Opened socket on {}", addr);
     let done = socket.incoming()
         .for_each(|(stream, addr)| {
+            println!("Received new connection");
             let done = arc_config.accept_async(stream)
                 .and_then(|stream| {
+                    println!("Completed TLS handshake");
                     let (reader, writer) = stream.split();
                     io::copy(reader, writer)
                 })

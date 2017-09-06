@@ -9,7 +9,7 @@ use tokio_rustls::{ClientConfigExt};
 use tokio_core::reactor::{Handle};
 use std::io;
 
-use connection::{Connection,SharedConnection};
+use transport::{Transport};
 use peer_information_base::{Peer,PeerInformationBase};
 
 struct LocalAddress {
@@ -31,7 +31,7 @@ impl LocalAddress {
 pub struct InnerState {
     pub id: String,
     pub pib: PeerInformationBase,
-    connections: HashMap<String, Vec<SharedConnection>>,
+    connections: HashMap<String, Vec<Transport>>,
     pub relays: Vec<String>,
     addresses: Vec<LocalAddress>,
     handle: Handle,
@@ -111,13 +111,13 @@ impl State {
         }
     }
 
-    fn add_connection(&self, id: String, conn: SharedConnection) {
+    fn add_connection(&self, id: String, conn: Transport) {
         self.write()
             .connections.entry(id).or_insert_with(Vec::new)
             .push(conn);
     }
 
-    fn connect(&self, id: String, addr: SocketAddr, cert: Certificate) -> impl Future<Item=SharedConnection, Error=io::Error> {
+    fn connect(&self, id: String, addr: SocketAddr, cert: Certificate) -> impl Future<Item=Transport, Error=io::Error> {
         let handle = self.read().handle.clone();
         let config = {
             let mut config = ClientConfig::new();
@@ -130,7 +130,7 @@ impl State {
         TcpStream::connect(&addr, &handle)
             .and_then(move |stream| config.connect_async(id.as_ref(), stream) )
             .and_then(move |stream| {
-                let conn = SharedConnection::from_tls_client(stream);
+                let conn = Transport::from_tls_client(stream);
                 state.add_connection(id2, conn.clone());
                 Ok(conn)
             })

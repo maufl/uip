@@ -10,7 +10,7 @@ extern crate tokio_core;
 extern crate tokio_rustls;
 extern crate async_readline;
 
-mod connection;
+mod transport;
 mod peer_information_base;
 mod state;
 use state::{State};
@@ -40,7 +40,7 @@ fn main() {
 
     let stdio = async_readline::RawStdio::new(&core.handle()).unwrap();
     let (stdin, stdout, _) = stdio.split();
-    let (commands, _) = async_readline::init(stdin, stdout);
+    let (commands, rl_writer) = async_readline::init(stdin, stdout);
 
     let done = commands.map(move |line| {
         state2.send_to("testserver.com".to_string(), line.line.clone());
