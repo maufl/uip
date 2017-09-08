@@ -3,9 +3,11 @@
 extern crate interfaces;
 extern crate igd;
 extern crate bytes;
+extern crate byteorder;
 extern crate rustls;
 extern crate futures;
 extern crate tokio_io;
+extern crate tokio_uds;
 extern crate tokio_core;
 extern crate tokio_rustls;
 extern crate async_readline;

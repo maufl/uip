@@ -2,12 +2,16 @@ use std::net::{SocketAddr};
 use std::collections::HashMap;
 use std::sync::{Arc,RwLock,Mutex,RwLockReadGuard,RwLockWriteGuard};
 use interfaces::{Interface,Kind};
-use futures::{Future,Poll,Async,future};
+use futures::{Future,Poll,Async,future,Stream};
 use tokio_core::net::TcpStream;
 use rustls::{ClientConfig,Certificate,ProtocolVersion};
 use tokio_rustls::{ClientConfigExt};
 use tokio_core::reactor::{Handle};
+use tokio_uds::{UnixDatagram,UnixDatagramCodec};
 use std::io;
+use std::str;
+use std::path::PathBuf;
+use std::os;
 
 use transport::{Transport};
 use peer_information_base::{Peer,PeerInformationBase};
@@ -35,6 +39,24 @@ pub struct InnerState {
     pub relays: Vec<String>,
     addresses: Vec<LocalAddress>,
     handle: Handle,
+}
+
+
+pub struct ControlProtocolCodec;
+
+impl UnixDatagramCodec for ControlProtocolCodec {
+    type In = String;
+    type Out = ();
+
+    fn decode(&mut self, src: &os::unix::net::SocketAddr, buf: &[u8]) -> io::Result<String> {
+        str::from_utf8(buf)
+            .map(|s| s.to_owned())
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, "non utf8 string"))
+    }
+
+    fn encode(&mut self, msg: (), buf: &mut Vec<u8>) -> io::Result<PathBuf> {
+        Err(io::Error::new(io::ErrorKind::Other, "no data expected"))
+    }
 }
 
 #[derive(Clone)]
@@ -111,6 +133,20 @@ impl State {
         }
     }
 
+    fn open_ctl_socket(&self) {
+        let state = self.clone();
+        let handle = self.read().handle.clone();
+        UnixDatagram::bind("/run/user/1000/uip/ctl.sock", &self.read().handle)
+            .expect("Unable to open unix control socket")
+            .framed(ControlProtocolCodec)
+            .and_then(|address| {
+                let socket = UnixDatagram::unbound(&handle)?;
+                socket.connect(address)?;
+                
+                Ok(())
+            });
+    }
+
     fn add_connection(&self, id: String, conn: Transport) {
         self.write()
             .connections.entry(id).or_insert_with(Vec::new)
@@ -148,7 +184,7 @@ impl State {
     pub fn send_to(&self, id: String, data: Vec<u8>) {
         if let Some(connections) =  self.read().connections.get(&id) {
             if let Some(connection) = connections.first() {
-                connection.write_async(data)
+                self.read().handle.spawn(connection.write_async(data).map_err(|_| ()))
             }
         }
     }

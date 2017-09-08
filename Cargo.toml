@@ -6,6 +6,7 @@ authors = ["Felix Konstantin Maurer <maufl@maufl.de>"]
 [dependencies]
 interfaces = "0.0.2"
 bytes = "0.4.4"
+byteorder = "1.0.0"
 igd = "0.6.0"
 async-readline = { git = "https://github.com/dpc/async-readline" } 
 futures = "0.1"
@@ -13,5 +14,6 @@ tokio-io = "0.1"
 rustls = "0.8"
 tokio-core = "0.1"
 tokio-rustls = "0.2"
+tokio-uds = "0.1.5"
 webpki-roots = "0.10"
 tokio-file-unix = "0.4"
