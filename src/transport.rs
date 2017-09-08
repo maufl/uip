@@ -3,9 +3,10 @@ use std::sync::{Arc,Mutex};
 use tokio_core::net::TcpStream;
 use tokio_io::codec::{Encoder,Decoder};
 use tokio_io::{AsyncRead,AsyncWrite};
-use rustls::{ServerSession,ClientSession};
+use rustls::{ServerSession,ClientSession,Session};
 use std::io::{Read,Write,Error,ErrorKind,Cursor};
-use futures::{Poll,Stream,Sink,StartSend,Future,Async,AsyncSink};
+use futures::{Poll,Stream,Sink,StartSend,Future,Async,AsyncSink,future};
+use futures::sync::mpsc::{Sender,SendError,Receiver,channel};
 use bytes::{BytesMut, BufMut, BigEndian as BytesBigEndian};
 use bytes::buf::{FromBuf};
 use byteorder::{BigEndian,ByteOrder};
@@ -71,10 +72,13 @@ impl Decoder for Codec {
 }
 
 #[derive(Clone)]
-pub struct Transport(Arc<Mutex<Sink<SinkItem=Frame,SinkError=Error>>>);
+pub struct Transport {
+    sink: Sender<Frame>,
+
+}
 
 impl Transport {
-    pub fn from_tls_client(stream: TlsStream<TcpStream, ClientSession>) -> Transport {
+    pub fn from_tls_stream<S: Session>(stream: TlsStream<TcpStream, S>) -> Transport {
         let (sink, stream) = stream.framed(Codec()).split();
         stream.for_each(|frame| {
             match frame {
@@ -84,48 +88,18 @@ impl Transport {
             };
             Ok(())
         });
-        Transport(Arc::new(Mutex::new(sink)))
-    }
-
-    pub fn from_tls_server(stream: TlsStream<TcpStream, ServerSession>) -> Transport {
-        let (sink, stream) = stream.framed(Codec()).split();
-        stream.for_each(|frame| {
-            match frame {
-                Frame::Ping => println!("Ping"),
-                Frame::Pong => println!("Pong"),
-                _ => {}
-            };
-            Ok(())
-        });
-        Transport(Arc::new(Mutex::new(sink)))
-    }
-
-    pub fn write_async(&self, data: Vec<u8>) -> FutureWrite {
-        FutureWrite {
-            data: data,
-            transport: self.clone()
+        let (sender, receiver) = channel::<Frame>(10);
+        receiver.forward(sink.sink_map_err(|_|()));
+        Transport {
+            sink: sender
         }
     }
-}
 
-pub struct FutureWrite {
-    data: Vec<u8>,
-    transport: Transport,
-}
-
-impl Future for FutureWrite {
-    type Item = ();
-    type Error = Error;
-
-    fn poll(&mut self) -> Poll<(), Error> {
-        let mut sink = self.transport.0.lock().expect("Unable to acquire lock on connection");
-        let res = sink.start_send(Frame::Data(0, BytesMut::from_buf(&self.data)))?;
-        match res {
-            AsyncSink::Ready => {
-                sink.poll_complete();
-                Ok(Async::Ready(()))
-            }
-            AsyncSink::NotReady(_) => Ok(Async::NotReady)
-        }
+    pub fn open_channel(&self, id: u16) -> impl Sink<SinkItem=BytesMut,SinkError=()> {
+        self.sink
+            .clone()
+            .sink_map_err(|_| ())
+            .with(move |buf| future::ok(Frame::Data(id, buf)))
     }
+
 }

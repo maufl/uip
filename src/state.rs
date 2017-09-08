@@ -2,7 +2,7 @@ use std::net::{SocketAddr};
 use std::collections::HashMap;
 use std::sync::{Arc,RwLock,Mutex,RwLockReadGuard,RwLockWriteGuard};
 use interfaces::{Interface,Kind};
-use futures::{Future,Poll,Async,future,Stream};
+use futures::{Future,Poll,Async,future,Stream,Sink};
 use tokio_core::net::TcpStream;
 use rustls::{ClientConfig,Certificate,ProtocolVersion};
 use tokio_rustls::{ClientConfigExt};
@@ -12,6 +12,7 @@ use std::io;
 use std::str;
 use std::path::PathBuf;
 use std::os;
+use bytes::BytesMut;
 
 use transport::{Transport};
 use peer_information_base::{Peer,PeerInformationBase};
@@ -166,7 +167,7 @@ impl State {
         TcpStream::connect(&addr, &handle)
             .and_then(move |stream| config.connect_async(id.as_ref(), stream) )
             .and_then(move |stream| {
-                let conn = Transport::from_tls_client(stream);
+                let conn = Transport::from_tls_stream(stream);
                 state.add_connection(id2, conn.clone());
                 Ok(conn)
             })
@@ -181,12 +182,10 @@ impl State {
         self.write().relays.push(address)
     }
 
-    pub fn send_to(&self, id: String, data: Vec<u8>) {
-        if let Some(connections) =  self.read().connections.get(&id) {
-            if let Some(connection) = connections.first() {
-                self.read().handle.spawn(connection.write_async(data).map_err(|_| ()))
-            }
-        }
+    pub fn open_channel(&self, host_id: String, channel_id: u16) -> Option<impl Sink<SinkItem=BytesMut,SinkError=()>> {
+        self.read().connections.get(&host_id)
+            .and_then(|connections| connections.first() )
+            .map(|connection| connection.open_channel(channel_id))
     }
 }
 
