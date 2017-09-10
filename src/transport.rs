@@ -1,5 +1,5 @@
 use tokio_rustls::{TlsStream};
-use std::sync::{Arc,Mutex};
+use std::sync::{Arc,Mutex,RwLock};
 use tokio_core::net::TcpStream;
 use tokio_io::codec::{Encoder,Decoder};
 use tokio_io::{AsyncRead,AsyncWrite};
@@ -10,11 +10,8 @@ use futures::sync::mpsc::{Sender,SendError,Receiver,channel};
 use bytes::{BytesMut, BufMut, BigEndian as BytesBigEndian};
 use bytes::buf::{FromBuf};
 use byteorder::{BigEndian,ByteOrder};
-
-enum GenericTlsStream {
-    Client(TlsStream<TcpStream, ClientSession>),
-    Server(TlsStream<TcpStream, ServerSession>),
-}
+use std::collections::{HashMap};
+use state::State;
 
 pub enum Frame {
     Ping,
@@ -73,33 +70,36 @@ impl Decoder for Codec {
 
 #[derive(Clone)]
 pub struct Transport {
+    state: State,
     sink: Sender<Frame>,
-
 }
 
 impl Transport {
-    pub fn from_tls_stream<S: Session>(stream: TlsStream<TcpStream, S>) -> Transport {
+    pub fn from_tls_stream<S: Session>(state: State, stream: TlsStream<TcpStream, S>, remote_id: String) -> Transport {
         let (sink, stream) = stream.framed(Codec()).split();
-        stream.for_each(|frame| {
+        let (sender, receiver) = channel::<Frame>(10);
+        receiver.forward(sink.sink_map_err(|_|()));
+        let transport = Transport {
+            state: state,
+            sink: sender,
+        };
+        let transport2 = transport.clone();
+        stream.for_each(move |frame| {
             match frame {
                 Frame::Ping => println!("Ping"),
                 Frame::Pong => println!("Pong"),
-                _ => {}
+                Frame::Data(channel_id, data) => {
+                    transport2.state.deliver_frame(remote_id.clone(), channel_id, data)
+                }
             };
             Ok(())
         });
-        let (sender, receiver) = channel::<Frame>(10);
-        receiver.forward(sink.sink_map_err(|_|()));
-        Transport {
-            sink: sender
-        }
+        return transport;
     }
 
-    pub fn open_channel(&self, id: u16) -> impl Sink<SinkItem=BytesMut,SinkError=()> {
-        self.sink
-            .clone()
-            .sink_map_err(|_| ())
-            .with(move |buf| future::ok(Frame::Data(id, buf)))
+    pub fn send_frame(&self, channel_id: u16, data: BytesMut) -> impl Future<Item=Sender<Frame>,Error=SendError<Frame>>{
+        self.sink.clone()
+            .send(Frame::Data(channel_id, data))
     }
 
 }

@@ -22,7 +22,7 @@ use rustls::internal::pemfile::{ certs };
 use std::net::ToSocketAddrs;
 use std::io::{ BufReader };
 use tokio_core::reactor::{Core};
-use futures::{Stream,Sink};
+use futures::{Stream,Sink,Future};
 use futures::future;
 use bytes::BytesMut;
 use bytes::buf::FromBuf;
@@ -47,10 +47,7 @@ fn main() {
     let (stdin, stdout, _) = stdio.split();
     let (commands, rl_writer) = async_readline::init(stdin, stdout);
 
-    let channel = state2
-        .open_channel("testserver.com".to_string(), 1)
-        .expect("Unable to open channel");
-    let done = commands.map(|line| BytesMut::from_buf(line.line) ).map_err(|_| () ).forward(channel);
+    let done = commands.for_each(|line|{ state2.send_frame("testserver.com".to_string(), 1u16, BytesMut::from_buf(line.line)); future::ok(()) });
     core.run(done).unwrap();
 }
 

@@ -2,7 +2,8 @@ use std::net::{SocketAddr};
 use std::collections::HashMap;
 use std::sync::{Arc,RwLock,Mutex,RwLockReadGuard,RwLockWriteGuard};
 use interfaces::{Interface,Kind};
-use futures::{Future,Poll,Async,future,Stream,Sink};
+use futures::{Future,IntoFuture,Poll,Async,future,Stream,Sink};
+use futures::sync::mpsc::{channel,Sender};
 use tokio_core::net::TcpStream;
 use rustls::{ClientConfig,Certificate,ProtocolVersion};
 use tokio_rustls::{ClientConfigExt};
@@ -13,6 +14,7 @@ use std::str;
 use std::path::PathBuf;
 use std::os;
 use bytes::BytesMut;
+use bytes::buf::FromBuf;
 
 use transport::{Transport};
 use peer_information_base::{Peer,PeerInformationBase};
@@ -39,6 +41,7 @@ pub struct InnerState {
     connections: HashMap<String, Vec<Transport>>,
     pub relays: Vec<String>,
     addresses: Vec<LocalAddress>,
+    sockets: HashMap<(String, u16), Sender<BytesMut>>,
     handle: Handle,
 }
 
@@ -46,17 +49,45 @@ pub struct InnerState {
 pub struct ControlProtocolCodec;
 
 impl UnixDatagramCodec for ControlProtocolCodec {
-    type In = String;
+    type In = (String, String, u16);
     type Out = ();
 
-    fn decode(&mut self, src: &os::unix::net::SocketAddr, buf: &[u8]) -> io::Result<String> {
-        str::from_utf8(buf)
+    fn decode(&mut self, src: &os::unix::net::SocketAddr, buf: &[u8]) -> io::Result<(String, String, u16)> {
+        let path = str::from_utf8(buf)
             .map(|s| s.to_owned())
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, "non utf8 string"))
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, "non utf8 string"))?;
+        let (channel_id, host_id) = {
+            let mut iter = path.split('/');
+            (
+                iter.next_back()
+                    .ok_or(io::Error::new(io::ErrorKind::InvalidData, "not enough path segements"))?
+                .parse::<u16>().map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid path segement"))?
+
+                ,
+                iter.next_back().ok_or(io::Error::new(io::ErrorKind::InvalidData, "not enough path segements"))?.to_string()
+            )
+        };
+        Ok((path, host_id, channel_id))
     }
 
     fn encode(&mut self, msg: (), buf: &mut Vec<u8>) -> io::Result<PathBuf> {
         Err(io::Error::new(io::ErrorKind::Other, "no data expected"))
+    }
+}
+
+pub struct Raw;
+
+impl UnixDatagramCodec for Raw {
+    type In = BytesMut;
+    type Out = BytesMut;
+
+    fn decode(&mut self, src: &os::unix::net::SocketAddr, buf: &[u8]) -> io::Result<BytesMut> {
+        Ok(BytesMut::from_buf(buf))
+    }
+
+    fn encode(&mut self, msg: BytesMut, buf: &mut Vec<u8>) -> io::Result<PathBuf> {
+        buf.copy_from_slice(&msg);
+        Ok(PathBuf::new())
     }
 }
 
@@ -71,6 +102,7 @@ impl State {
             connections: HashMap::new(),
             relays: Vec::new(),
             addresses: Vec::new(),
+            sockets: HashMap::new(),
             handle: handle,
         })))
     }
@@ -140,10 +172,17 @@ impl State {
         UnixDatagram::bind("/run/user/1000/uip/ctl.sock", &self.read().handle)
             .expect("Unable to open unix control socket")
             .framed(ControlProtocolCodec)
-            .and_then(|address| {
-                let socket = UnixDatagram::unbound(&handle)?;
-                socket.connect(address)?;
-                
+            .for_each(|(path, host_id, channel_id)| {
+                let socket = UnixDatagram::unbound(&state.read().handle)?;
+                socket.connect(path)?;
+                let (sink, stream) = socket.framed(Raw).split();
+                let (sender, receiver) = channel::<BytesMut>(10);
+                receiver.forward(sink.sink_map_err(|_|()));
+                state.write().sockets.insert( (host_id.clone(), channel_id), sender);
+                stream.for_each(|buf| {
+                    state.send_frame(host_id.clone(), channel_id, buf);
+                    future::ok(())
+                });
                 Ok(())
             });
     }
@@ -167,7 +206,7 @@ impl State {
         TcpStream::connect(&addr, &handle)
             .and_then(move |stream| config.connect_async(id.as_ref(), stream) )
             .and_then(move |stream| {
-                let conn = Transport::from_tls_stream(stream);
+                let conn = Transport::from_tls_stream(state.clone(), stream, id2.clone());
                 state.add_connection(id2, conn.clone());
                 Ok(conn)
             })
@@ -182,10 +221,18 @@ impl State {
         self.write().relays.push(address)
     }
 
-    pub fn open_channel(&self, host_id: String, channel_id: u16) -> Option<impl Sink<SinkItem=BytesMut,SinkError=()>> {
-        self.read().connections.get(&host_id)
-            .and_then(|connections| connections.first() )
-            .map(|connection| connection.open_channel(channel_id))
+    pub fn send_frame(&self, host_id: String, channel_id: u16, data: BytesMut) {
+        if let Some(connections) = self.read().connections.get(&host_id) {
+            if let Some(connection) = connections.first() {
+                connection.send_frame(channel_id, data);
+            }
+        }
+    }
+
+    pub fn deliver_frame(&self, host_id: String, channel_id: u16, data: BytesMut) {
+        if let Some(socket) = self.read().sockets.get( &(host_id, channel_id) ) {
+            socket.clone().send(data);
+        }
     }
 }
 
