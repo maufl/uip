@@ -61,8 +61,8 @@ impl UnixDatagramCodec for ControlProtocolCodec {
             (
                 iter.next_back()
                     .ok_or(io::Error::new(io::ErrorKind::InvalidData, "not enough path segements"))?
-                .parse::<u16>().map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid path segement"))?
-
+                    .trim()
+                    .parse::<u16>().map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("invalid path segement: {}", e)))?
                 ,
                 iter.next_back().ok_or(io::Error::new(io::ErrorKind::InvalidData, "not enough path segements"))?.to_string()
             )
@@ -169,22 +169,25 @@ impl State {
     fn open_ctl_socket(&self) {
         let state = self.clone();
         let handle = self.read().handle.clone();
-        UnixDatagram::bind("/run/user/1000/uip/ctl.sock", &self.read().handle)
+        let done = UnixDatagram::bind("/run/user/1000/uip/ctl.sock", &self.read().handle)
             .expect("Unable to open unix control socket")
             .framed(ControlProtocolCodec)
-            .for_each(|(path, host_id, channel_id)| {
+            .for_each(move |(path, host_id, channel_id)| {
                 let socket = UnixDatagram::unbound(&state.read().handle)?;
                 socket.connect(path)?;
                 let (sink, stream) = socket.framed(Raw).split();
                 let (sender, receiver) = channel::<BytesMut>(10);
                 receiver.forward(sink.sink_map_err(|_|()));
                 state.write().sockets.insert( (host_id.clone(), channel_id), sender);
-                stream.for_each(|buf| {
-                    state.send_frame(host_id.clone(), channel_id, buf);
+                let state2 = state.clone();
+                let done = stream.for_each(move |buf| {
+                    state2.send_frame(host_id.clone(), channel_id, buf);
                     future::ok(())
-                });
+                }).map_err(|_| ());
+                state.read().handle.spawn(done);
                 Ok(())
-            });
+            }).map_err(|e| println!("Control socket was closed: {}", e) );
+        self.read().handle.spawn(done);
     }
 
     fn add_connection(&self, id: String, conn: Transport) {
@@ -243,6 +246,7 @@ impl Future for State {
     fn poll(&mut self) -> Poll<(), ()> {
         self.discover_addresses();
         self.connect_to_relays();
+        self.open_ctl_socket();
         Ok(Async::NotReady)
     }
 }
