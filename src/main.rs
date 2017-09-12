@@ -11,9 +11,16 @@ extern crate tokio_uds;
 extern crate tokio_core;
 extern crate tokio_rustls;
 extern crate async_readline;
+extern crate serde;
+extern crate serde_json;
+#[macro_use]
+extern crate serde_derive;
+extern crate openssl;
 
 mod transport;
 mod peer_information_base;
+mod configuration;
+use configuration::Configuration;
 mod state;
 use state::{State};
 
@@ -26,19 +33,25 @@ use futures::{Stream,Sink,Future};
 use futures::future;
 use bytes::BytesMut;
 use bytes::buf::FromBuf;
-
-fn load_certs(path: &str) -> Vec<Certificate> {
-    certs(&mut BufReader::new(std::fs::File::open(path).unwrap())).unwrap()
-}
+use std::fs::File;
 
 fn main() {
     let mut core = Core::new().unwrap();
 
-    let addr = "127.0.0.1:4433".to_socket_addrs().unwrap().next().unwrap();
-    let cert = load_certs("rsa/ca.cert").pop().unwrap();
-    let state = State::new("test".to_string(), core.handle());
-    state.add_relay("testserver.com".to_string());
-    state.add_relay_peer("testserver.com".to_string(), addr, cert.clone());
+    let config_file = match File::open("config-a.json") {
+        Ok(file) => file,
+        Err(err) => {
+            return println!("Error while opening configuration file: {}", err);
+        }
+    };
+    let config: Configuration = match serde_json::from_reader(config_file) {
+        Ok(conf) => conf,
+        Err(err) => {
+            return println!("Error while reading configuration file: {}", err);
+        }
+    };
+
+    let state = State::from_configuration(config, core.handle());
 
     let state2 = state.clone();
     core.handle().spawn(state);

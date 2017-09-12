@@ -18,6 +18,7 @@ use bytes::buf::FromBuf;
 
 use transport::{Transport};
 use peer_information_base::{Peer,PeerInformationBase};
+use configuration::{Configuration};
 
 struct LocalAddress {
     interface: String,
@@ -101,6 +102,18 @@ impl State {
             pib: PeerInformationBase::new(),
             connections: HashMap::new(),
             relays: Vec::new(),
+            addresses: Vec::new(),
+            sockets: HashMap::new(),
+            handle: handle,
+        })))
+    }
+
+    pub fn from_configuration(config: Configuration, handle: Handle) -> State {
+        State(Arc::new(RwLock::new(InnerState {
+            id: config.id,
+            pib: config.pib,
+            connections: HashMap::new(),
+            relays: config.relays,
             addresses: Vec::new(),
             sockets: HashMap::new(),
             handle: handle,
