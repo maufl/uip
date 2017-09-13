@@ -4,5 +4,7 @@ use peer_information_base::{PeerInformationBase};
 pub struct Configuration {
     pub id: String,
     pub pib: PeerInformationBase,
-    pub relays: Vec<String>
+    pub relays: Vec<String>,
+    pub certificate: String,
+    pub key: String,
 }

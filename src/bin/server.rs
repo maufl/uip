@@ -2,7 +2,6 @@ extern crate rustls;
 extern crate futures;
 extern crate tokio_io;
 extern crate tokio_core;
-extern crate webpki_roots;
 extern crate tokio_rustls;
 
 use std::sync::Arc;

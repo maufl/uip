@@ -4,6 +4,7 @@ use rustls::{Certificate};
 use serde::{Serialize,Deserialize,Serializer,Deserializer};
 use openssl::x509::{X509};
 
+#[allow(dead_code)]
 #[derive(Serialize,Deserialize)]
 pub struct Peer {
     pub id: String,
@@ -28,6 +29,7 @@ fn deserialize_certificate<'de, D>(deserializer: D) -> Result<Certificate, D::Er
     Ok(Certificate(der))
 }
 
+#[allow(dead_code)]
 impl Peer {
     pub fn new(id: String, addresses: Vec<SocketAddr>, relays: Vec<String>, cert: Certificate) -> Peer {
         Peer {
@@ -44,6 +46,7 @@ pub struct PeerInformationBase {
     peers: HashMap<String, Peer>
 }
 
+#[allow(dead_code)]
 impl PeerInformationBase {
     pub fn new() -> PeerInformationBase {
         PeerInformationBase {

@@ -1,16 +1,13 @@
 use tokio_rustls::{TlsStream};
-use std::sync::{Arc,Mutex,RwLock};
 use tokio_core::net::TcpStream;
 use tokio_io::codec::{Encoder,Decoder};
-use tokio_io::{AsyncRead,AsyncWrite};
-use rustls::{ServerSession,ClientSession,Session};
-use std::io::{Read,Write,Error,ErrorKind,Cursor};
-use futures::{Poll,Stream,Sink,StartSend,Future,Async,AsyncSink,future};
-use futures::sync::mpsc::{Sender,SendError,Receiver,channel};
+use tokio_io::{AsyncRead};
+use rustls::{Session};
+use std::io::{Error,ErrorKind};
+use futures::{Stream,Sink,Future};
+use futures::sync::mpsc::{Sender,SendError,channel};
 use bytes::{BytesMut, BufMut, BigEndian as BytesBigEndian};
-use bytes::buf::{FromBuf};
 use byteorder::{BigEndian,ByteOrder};
-use std::collections::{HashMap};
 use state::State;
 
 pub enum Frame {
@@ -75,16 +72,16 @@ pub struct Transport {
 }
 
 impl Transport {
-    pub fn from_tls_stream<S: Session>(state: State, stream: TlsStream<TcpStream, S>, remote_id: String) -> Transport {
+    pub fn from_tls_stream<S: Session + 'static>(state: State, stream: TlsStream<TcpStream, S>, remote_id: String) -> Transport {
         let (sink, stream) = stream.framed(Codec()).split();
         let (sender, receiver) = channel::<Frame>(10);
-        receiver.forward(sink.sink_map_err(|_|()));
+        state.handle().spawn(receiver.forward(sink.sink_map_err(|_|())).map(|_| ()).map_err(|_| ()));
         let transport = Transport {
-            state: state,
+            state: state.clone(),
             sink: sender,
         };
         let transport2 = transport.clone();
-        stream.for_each(move |frame| {
+        let done = stream.for_each(move |frame| {
             match frame {
                 Frame::Ping => println!("Ping"),
                 Frame::Pong => println!("Pong"),
@@ -94,6 +91,7 @@ impl Transport {
             };
             Ok(())
         });
+        state.handle().spawn(done.map_err(|_| ()));
         return transport;
     }
 
