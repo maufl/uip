@@ -1,13 +1,12 @@
-use tokio_rustls::{TlsStream};
 use tokio_core::net::TcpStream;
 use tokio_io::codec::{Encoder,Decoder};
 use tokio_io::{AsyncRead};
-use rustls::{Session};
 use std::io::{Error,ErrorKind};
 use futures::{Stream,Sink,Future};
 use futures::sync::mpsc::{Sender,SendError,channel};
 use bytes::{BytesMut, BufMut, BigEndian as BytesBigEndian};
 use byteorder::{BigEndian,ByteOrder};
+use tokio_openssl::SslStream;
 use state::State;
 
 pub enum Frame {
@@ -61,7 +60,7 @@ impl Decoder for Codec {
             return Ok(None);
         }
         src.split_to(5);
-        Ok(Some(Frame::Data(app_id, src.split_off(length))))
+        Ok(Some(Frame::Data(app_id, src.split_to(length))))
     }
 }
 
@@ -72,10 +71,12 @@ pub struct Transport {
 }
 
 impl Transport {
-    pub fn from_tls_stream<S: Session + 'static>(state: State, stream: TlsStream<TcpStream, S>, remote_id: String) -> Transport {
+    pub fn from_tls_stream(state: State, stream: SslStream<TcpStream>, remote_id: String) -> Transport {
         let (sink, stream) = stream.framed(Codec()).split();
         let (sender, receiver) = channel::<Frame>(10);
-        state.handle().spawn(receiver.forward(sink.sink_map_err(|_|())).map(|_| ()).map_err(|_| ()));
+        let done = receiver.forward(sink.sink_map_err(|err| println!("Unexpected sink error: {}", err) ))
+            .map(|_| ());
+        state.handle().spawn(done);
         let transport = Transport {
             state: state.clone(),
             sink: sender,
@@ -90,12 +91,15 @@ impl Transport {
                 }
             };
             Ok(())
+        }).map_err(|err| {
+            println!("Error while receiving frame: {}", err)
         });
-        state.handle().spawn(done.map_err(|_| ()));
+        state.handle().spawn(done);
         return transport;
     }
 
     pub fn send_frame(&self, channel_id: u16, data: BytesMut) -> impl Future<Item=Sender<Frame>,Error=SendError<Frame>>{
+        println!("Sending frame to {}", channel_id);
         self.sink.clone()
             .send(Frame::Data(channel_id, data))
     }
