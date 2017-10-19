@@ -14,6 +14,8 @@ use openssl::ssl::{SslConnectorBuilder,SslAcceptorBuilder, SslMethod, SslVerifyM
 use openssl::stack::Stack;
 use tokio_openssl::{SslStream,SslConnectorExt,SslAcceptorExt};
 use std::io;
+use std::path::Path;
+use std::fs;
 use std::error::Error;
 
 use transport::{Transport};
@@ -84,6 +86,17 @@ impl State {
             listen: "0.0.0.0:0".parse().map_err(|e| format!("Error while parsing socket address: {}", e) )?,
             ctl_socket: format!("/run/user/1000/uip/{}.ctl", hash)
         }))))
+    }
+
+    pub fn to_configuration(&self) -> Configuration {
+        let state = self.read();
+        Configuration {
+            id: state.id.clone(),
+            pib: state.pib.clone(),
+            relays: state.relays.clone(),
+            listen: state.listen.clone(),
+            ctl_socket: state.ctl_socket.clone()
+        }
     }
 
     pub fn read(&self) -> RwLockReadGuard<InnerState> {
@@ -279,6 +292,15 @@ impl State {
         if let Some(socket) = self.read().sockets.get( &(host_id, channel_id) ) {
             self.read().handle.spawn(socket.clone().send(data).map(|_| ()).map_err(|_| ()));
         }
+    }
+}
+
+impl Drop for State {
+    fn drop(&mut self) {
+        let path = &self.read().ctl_socket;
+        if Path::new(path).exists() {
+            let _ = fs::remove_file(path);
+        };
     }
 }
 

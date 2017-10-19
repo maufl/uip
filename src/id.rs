@@ -36,6 +36,16 @@ fn deserialize_key<'de, D>(deserializer: D) -> Result<PKey, D::Error> where D: D
     Ok(PKey::private_key_from_pem(string.as_bytes()).unwrap())
 }
 
+impl Clone for Id {
+    fn clone(&self) -> Id {
+        Id {
+            hash: self.hash.clone(),
+            key: PKey::private_key_from_pem(&self.key.private_key_to_pem().expect("Unable to serialze key to pem")).expect("Unable to deserialize key from pem"),
+            cert: self.cert.clone()
+        }
+    }
+}
+
 impl Id {
 
     pub fn generate() -> Result<Id, ErrorStack> {

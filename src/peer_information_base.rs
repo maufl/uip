@@ -2,7 +2,7 @@ use std::net::{SocketAddr};
 use std::collections::HashMap;
 
 #[allow(dead_code)]
-#[derive(Serialize,Deserialize)]
+#[derive(Serialize,Deserialize,Clone)]
 pub struct Peer {
     pub id: String,
     pub addresses: Vec<SocketAddr>,
@@ -20,7 +20,7 @@ impl Peer {
     }
 }
 
-#[derive(Serialize,Deserialize)]
+#[derive(Serialize,Deserialize,Clone)]
 pub struct PeerInformationBase {
     peers: HashMap<String, Peer>
 }
