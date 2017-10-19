@@ -49,7 +49,7 @@ pub struct InnerState {
     addresses: Vec<LocalAddress>,
     sockets: HashMap<(String, u16), Sender<BytesMut>>,
     handle: Handle,
-    listen: SocketAddr,
+    port: u16,
     ctl_socket: String,
 }
 
@@ -68,7 +68,7 @@ impl State {
             addresses: Vec::new(),
             sockets: HashMap::new(),
             handle: handle,
-            listen: config.listen,
+            port: config.port,
             ctl_socket: config.ctl_socket
         }))))
     }
@@ -83,7 +83,7 @@ impl State {
             addresses: Vec::new(),
             sockets: HashMap::new(),
             handle: handle,
-            listen: "0.0.0.0:0".parse().map_err(|e| format!("Error while parsing socket address: {}", e) )?,
+            port: 0,
             ctl_socket: format!("/run/user/1000/uip/{}.ctl", hash)
         }))))
     }
@@ -94,7 +94,7 @@ impl State {
             id: state.id.clone(),
             pib: state.pib.clone(),
             relays: state.relays.clone(),
-            listen: state.listen.clone(),
+            port: state.port.clone(),
             ctl_socket: state.ctl_socket.clone()
         }
     }
@@ -203,8 +203,11 @@ impl State {
             builder.builder_mut().set_verify_callback(SSL_VERIFY_PEER, |_valid, context| context.current_cert().is_some() );
             builder.build()
         };
-        let listener = TcpListener::bind(&self.read().listen, &self.read().handle).expect("Unable to bind to local address");
-        println!("Listening on address {}", listener.local_addr().expect("Not bound to a local address"));
+        let addr: SocketAddr = format!("0.0.0.0:{}", &self.read().port).parse().expect("Unable to parse local address");
+        let listener = TcpListener::bind(&addr, &self.read().handle).expect("Unable to bind to local address");
+        let local_addr = listener.local_addr().expect("Not bound to a local address");
+        println!("Listening on address {}", local_addr);
+        self.write().port = local_addr.port();
         let task = listener.incoming()
             .for_each(move |(stream, _address)| {
                 let state2 = state.clone();

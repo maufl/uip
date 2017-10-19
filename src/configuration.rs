@@ -1,4 +1,3 @@
-use std::net::SocketAddr;
 use peer_information_base::{PeerInformationBase};
 use id::Id;
 
@@ -7,6 +6,6 @@ pub struct Configuration {
     pub id: Id,
     pub pib: PeerInformationBase,
     pub relays: Vec<String>,
-    pub listen: SocketAddr,
+    pub port: u16,
     pub ctl_socket: String
 }
