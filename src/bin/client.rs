@@ -13,33 +13,32 @@ use uip::Id;
 
 use tokio_core::reactor::{Core};
 use std::fs::File;
+use std::path::Path;
 use futures::{Stream};
 use std::env;
-use std::io::Write;
+use std::io::{Write,Error,ErrorKind};
 use std::net::SocketAddr;
 use bytes::BytesMut;
 
 
 fn main() {
     let mut core = Core::new().unwrap();
-    let state = if env::args().count() > 1 {
-        let config_file_path = env::args().skip(1).next().expect("No config file given");
-
-        let config_file = match File::open(config_file_path) {
-            Ok(file) => file,
-            Err(err) => {
-                return println!("Error while opening configuration file: {}", err);
-            }
-        };
-        let config: Configuration = match serde_json::from_reader(config_file) {
+    
+    let config_file_path = if env::args().count() > 1 {
+        env::args().skip(1).next().expect("No config file given")
+    } else {
+        ".client.json".to_string()
+    };
+    let state = if Path::new(&config_file_path).is_file() {
+        let config = match read_configuration(&config_file_path) {
             Ok(conf) => conf,
             Err(err) => {
                 return println!("Error while reading configuration file: {}", err);
             }
         };
-
         State::from_configuration(config, core.handle()).unwrap()
     } else {
+        println!("Generating new ID");
         let id = Id::generate().expect("Unable to generate an ID");
         State::from_id(id, core.handle()).unwrap()
     };
@@ -52,10 +51,13 @@ fn main() {
     let (stdin, stdout, _) = stdio.split();
     let (commands, rl_writer) = async_readline::init(stdin, stdout);
 
-    let done = commands.map(move |line| {
+    let done = commands.and_then(move |line| {
         let command = String::from_utf8(line.line.clone()).unwrap();
         if command == "exit" {
-            std::process::exit(0);
+            if let Err(err) = write_configuration(config_file_path.as_ref(), &state2.to_configuration()) {
+                println!("Error while saving configuration: {}", err);
+            };
+            return Err(Error::new(ErrorKind::Other, "Program exit"));
         } else if command.starts_with("peer add") {
             let mut args = command.split_whitespace();
             if args.clone().count() < 4 {
@@ -89,7 +91,25 @@ fn main() {
         let mut v = vec!();
         let _ = write!(v, "\n> ");
         v.append(&mut line.line.clone());
-        v
+        Ok(v)
     }).forward(rl_writer);
-    core.run(done).unwrap();
+    let _ = core.run(done);
+}
+
+fn read_configuration(path: &String) -> Result<Configuration, String> {
+    let config_file = match File::open(path) {
+        Ok(file) => file,
+        Err(err) => {
+            return Err(format!("Error while opening configuration file: {}", err));
+        }
+    };
+    serde_json::from_reader(config_file)
+        .map_err(|err| format!("Error while reading configuration file: {}", err))
+}
+fn write_configuration(path: &str, conf: &Configuration) -> Result<(), String> {
+    let config_file = File::create(path)
+        .map_err(|err| format!("Error while opening configuration file: {}", err))?;
+    serde_json::to_writer(config_file, conf)
+        .map(|_| ())
+        .map_err(|err| format!("Error while reading configuration file: {}", err))
 }
