@@ -6,7 +6,8 @@ use futures::{Future,Poll,Async,future,Stream,Sink};
 use futures::sync::mpsc::{channel,Sender};
 use tokio_core::net::{TcpListener,TcpStream};
 use tokio_core::reactor::{Handle};
-use tokio_uds::{UnixDatagram};
+use tokio_uds::{UnixListener};
+use tokio_io::{AsyncRead};
 use bytes::BytesMut;
 use openssl::hash::{hash2,MessageDigest};
 use openssl::x509::{X509};
@@ -21,7 +22,7 @@ use std::error::Error;
 use transport::{Transport};
 use peer_information_base::{Peer,PeerInformationBase};
 use configuration::{Configuration};
-use unix_socket::{ControlProtocolCodec,Raw};
+use unix_socket::{ControlProtocolCodec,Frame};
 use id::Id;
 
 #[allow(dead_code)]
@@ -173,23 +174,31 @@ impl State {
 
     fn open_ctl_socket(&self) {
         let state = self.clone();
-        let done = UnixDatagram::bind(&self.read().ctl_socket, &self.read().handle)
+        let done = UnixListener::bind(&self.read().ctl_socket, &self.read().handle)
             .expect("Unable to open unix control socket")
-            .framed(ControlProtocolCodec)
-            .for_each(move |(path, host_id, channel_id)| {
-                let socket = UnixDatagram::unbound(&state.read().handle)?;
-                socket.connect(path)?;
-                let (sink, stream) = socket.framed(Raw).split();
-                let (sender, receiver) = channel::<BytesMut>(10);
-                state.read().handle.spawn(receiver.forward(sink.sink_map_err(|_|())).map(|_| ()).map_err(|_| ()));
-                state.write().sockets.insert( (host_id.clone(), channel_id), sender);
-                let state2 = state.clone();
-                let done = stream.for_each(move |buf| {
-                    state2.send_frame(host_id.clone(), channel_id, buf);
-                    future::ok(())
-                }).map_err(|_| ());
-                state.read().handle.spawn(done);
-                Ok(())
+            .incoming().for_each(move |(stream, _addr)| {
+                let state = state.clone();
+                let socket = stream.framed(ControlProtocolCodec);
+                socket.into_future().and_then(move |(frame,socket)| {
+                    let (host_id, channel_id) = match frame {
+                        Some(Frame::Connect(host_id, channel_id)) => (host_id, channel_id),
+                        _ => return Err((io::Error::new(io::ErrorKind::Other, "Unexpected message"), socket))
+                    };
+                    let (sink, stream) = socket.split();
+                    let (sender, receiver) = channel::<BytesMut>(10);
+                    state.read().handle.spawn(receiver.forward(sink.sink_map_err(|_|()).with(|data| Ok(Frame::Data(data)) )).map(|_| ()).map_err(|_| ()));
+                    state.write().sockets.insert( (host_id.clone(), channel_id), sender);
+                    let state2 = state.clone();
+                    let done = stream.for_each(move |buf| {
+                        match buf {
+                            Frame::Data(buf) => state2.send_frame(host_id.clone(), channel_id, buf),
+                            Frame::Connect(_,_) => {}
+                        };
+                        future::ok(())
+                    }).map_err(|_| ());
+                    state.read().handle.spawn(done);
+                    Ok(())
+                }).map_err(|e| e.0 )
             }).map_err(|e| println!("Control socket was closed: {}", e) );
         self.read().handle.spawn(done);
     }
