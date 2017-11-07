@@ -2,8 +2,7 @@ use std::net::{SocketAddr};
 use std::collections::HashMap;
 use std::sync::{Arc,RwLock,RwLockReadGuard,RwLockWriteGuard};
 use interfaces::{Interface,Kind};
-use futures::{Future,Poll,Async,future,Stream,Sink};
-use futures::sync::mpsc::{channel,Sender};
+use futures::{Future,Poll,Async,future,Stream};
 use tokio_core::net::{TcpListener,TcpStream};
 use tokio_core::reactor::{Handle};
 use tokio_uds::{UnixListener};
@@ -22,7 +21,8 @@ use std::error::Error;
 use transport::{Transport};
 use peer_information_base::{Peer,PeerInformationBase};
 use configuration::{Configuration};
-use unix_socket::{ControlProtocolCodec,Frame};
+use unix_codec::{ControlProtocolCodec,Frame};
+use unix_socket::{UnixSocket};
 use id::Id;
 
 #[allow(dead_code)]
@@ -48,11 +48,21 @@ pub struct InnerState {
     connections: HashMap<String, Vec<Transport>>,
     pub relays: Vec<String>,
     addresses: Vec<LocalAddress>,
-    sockets: HashMap<(String, u16), Sender<BytesMut>>,
+    sockets: HashMap<(String, u16), UnixSocket>,
     handle: Handle,
     port: u16,
     ctl_socket: String,
 }
+
+impl Drop for InnerState {
+    fn drop(&mut self) {
+        let path = &self.ctl_socket;
+        if Path::new(path).exists() {
+            let _ = fs::remove_file(path);
+        };
+    }
+}
+
 
 
 
@@ -104,12 +114,12 @@ impl State {
         self.0.read().expect("Unable to acquire read lock on state")
     }
 
-    pub fn handle(&self) -> Handle {
-        self.read().handle.clone()
-    }
-
     fn write(&self) -> RwLockWriteGuard<InnerState> {
         self.0.write().expect("Unable to acquire write lock on state")
+    }
+
+    pub fn spawn<F: Future<Item=(), Error=()> + 'static>(&self, f: F) {
+        self.read().handle.spawn(f)
     }
 
     fn discover_addresses(&self) -> () {
@@ -168,7 +178,7 @@ impl State {
             let future = self.connect(relay.clone(), addr)
                 .and_then(|_| future::ok(()) )
                 .map_err(move |err| println!("Unable to connect to peer {}: {}", relay, err) );
-            self.read().handle.spawn(future);
+            self.spawn(future);
         }
     }
 
@@ -184,23 +194,17 @@ impl State {
                         Some(Frame::Connect(host_id, channel_id)) => (host_id, channel_id),
                         _ => return Err((io::Error::new(io::ErrorKind::Other, "Unexpected message"), socket))
                     };
-                    let (sink, stream) = socket.split();
-                    let (sender, receiver) = channel::<BytesMut>(10);
-                    state.read().handle.spawn(receiver.forward(sink.sink_map_err(|_|()).with(|data| Ok(Frame::Data(data)) )).map(|_| ()).map_err(|_| ()));
-                    state.write().sockets.insert( (host_id.clone(), channel_id), sender);
-                    let state2 = state.clone();
-                    let done = stream.for_each(move |buf| {
-                        match buf {
-                            Frame::Data(buf) => state2.send_frame(host_id.clone(), channel_id, buf),
-                            Frame::Connect(_,_) => {}
-                        };
-                        future::ok(())
-                    }).map_err(|_| ());
-                    state.read().handle.spawn(done);
+                    let unix_socket = UnixSocket::from_unix_socket(state.clone(), socket, host_id.clone(), channel_id);
+                    state.write().sockets.insert( (host_id.clone(), channel_id), unix_socket);
                     Ok(())
-                }).map_err(|e| e.0 )
+                }).then(|result| {
+                    if let Err(err) = result {
+                        println!("Error in unix stream: {}", err.0);
+                    }
+                    Ok(())
+                })
             }).map_err(|e| println!("Control socket was closed: {}", e) );
-        self.read().handle.spawn(done);
+        self.spawn(done);
     }
 
     fn listen(&self) {
@@ -230,7 +234,7 @@ impl State {
                         Ok(())
                     })
             }).map_err(|err| println!("TLS listener died: {}", err) );
-        self.read().handle.spawn(task);
+        self.spawn(task);
     }
 
     fn accept_connection(&self, connection: SslStream<TcpStream>) -> Result<(), String> {
@@ -280,39 +284,31 @@ impl State {
     }
 
     pub fn send_frame(&self, host_id: String, channel_id: u16, data: BytesMut) {
-        if let Some(connections) = self.read().connections.get(&host_id) {
-            if let Some(connection) = connections.first() {
-                let task = connection.send_frame(channel_id, data)
-                    .then(|result| {
-                        match result {
-                            Ok(_) => println!("Successfully sent frame"),
-                            Err(ref err) => println!("Error while sending frame: {}", err)
-                        };
-                        Ok(())
-                    });
-                self.handle().spawn(task);
-            } else {
-                println!("No connection for host id {}", host_id)
-            }
-        } else {
-            println!("No connection for host id {}", host_id)
-        }
+        let state = self.read();
+        let connections = match state.connections.get(&host_id) {
+            Some(conns) => conns,
+            None => return println!("No connection for host id {}", host_id)
+        };
+        let connection = match connections.first() {
+            Some(conn) => conn,
+            None => return println!("No connection for host id {}", host_id)
+        };
+        let task = connection.send_frame(channel_id, data)
+            .then(|result| {
+                match result {
+                    Ok(_) => println!("Successfully sent frame"),
+                    Err(ref err) => println!("Error while sending frame: {}", err)
+                };
+                Ok(())
+            });
+        self.spawn(task);
     }
 
     pub fn deliver_frame(&self, host_id: String, channel_id: u16, data: BytesMut) {
         println!("Received new data from {} in channel {}: {:?}", host_id, channel_id, data);
         if let Some(socket) = self.read().sockets.get( &(host_id, channel_id) ) {
-            self.read().handle.spawn(socket.clone().send(data).map(|_| ()).map_err(|_| ()));
+            self.spawn(socket.send_frame(data).map(|_| ()).map_err(|_| ()));
         }
-    }
-}
-
-impl Drop for State {
-    fn drop(&mut self) {
-        let path = &self.read().ctl_socket;
-        if Path::new(path).exists() {
-            let _ = fs::remove_file(path);
-        };
     }
 }
 

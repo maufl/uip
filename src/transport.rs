@@ -76,7 +76,7 @@ impl Transport {
         let (sender, receiver) = channel::<Frame>(10);
         let done = receiver.forward(sink.sink_map_err(|err| println!("Unexpected sink error: {}", err) ))
             .map(|_| ());
-        state.handle().spawn(done);
+        state.spawn(done);
         let transport = Transport {
             state: state.clone(),
             sink: sender,
@@ -94,7 +94,7 @@ impl Transport {
         }).map_err(|err| {
             println!("Error while receiving frame: {}", err)
         });
-        state.handle().spawn(done);
+        state.spawn(done);
         return transport;
     }
 

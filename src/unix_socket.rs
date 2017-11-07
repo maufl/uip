@@ -1,81 +1,45 @@
-use std::io::{Result,Error,ErrorKind};
-use byteorder::{BigEndian,ByteOrder};
-use bytes::BytesMut;
-use bytes::buf::{BufMut};
-use tokio_io::codec::{Decoder,Encoder};
+use futures::{Stream,Sink,Future};
+use futures::future;
+use futures::sync::mpsc::{Sender,SendError,channel};
+use bytes::{BytesMut};
+use tokio_uds::{UnixStream};
+use tokio_io::codec::Framed;
 
-pub enum Frame {
-    Connect(String, u16),
-    Data(BytesMut),
+use state::State;
+use unix_codec::{Frame,ControlProtocolCodec};
+
+
+#[derive(Clone)]
+pub struct UnixSocket {
+    state: State,
+    sink: Sender<Frame>,
 }
 
-pub struct ControlProtocolCodec;
-
-impl Decoder for ControlProtocolCodec {
-    type Item = Frame;
-    type Error = Error;
-
-    fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Frame>> {
-        if buf.len() < 3 {
-            return Ok(None);
-        }
-        let typ = buf.as_ref()[0];
-        match typ {
-            1u8 => parse_connect(buf),
-            2u8 => parse_data(buf),
-            _ => Err(Error::new(ErrorKind::Other, "Invalid packet"))
-        }
+impl UnixSocket {
+    pub fn from_unix_socket(state: State, socket: Framed<UnixStream, ControlProtocolCodec>, host_id: String, channel_id: u16) -> UnixSocket {
+        let (sink, stream) = socket.split();
+        let (sender, receiver) = channel::<Frame>(10);
+        state.spawn(receiver.forward(sink.sink_map_err(|err| println!("Sink error: {}", err))).map(|_| ()).map_err(|err| println!("Forwarding error: {:?}", err)));
+        let state2 = state.clone();
+        let done = stream.for_each(move |frame| {
+            match frame {
+                Frame::Data(buf) => state2.send_frame(host_id.clone(), channel_id, buf),
+                Frame::Connect(_,_) => {}
+            };
+            future::ok(())
+        }).map_err(|err| println!("Unix stream error: {}", err));
+        state.spawn(done);
+        let unix_socket = UnixSocket {
+            state: state.clone(),
+            sink: sender,
+        };
+        return unix_socket;
     }
 
-}
-
-impl Encoder for ControlProtocolCodec {
-    type Item = Frame;
-    type Error = Error;
-
-    fn encode(&mut self, msg: Frame, buf: &mut BytesMut) -> Result<()> {
-        match msg {
-            Frame::Connect(host_id, channel_id) => encode_connect(host_id, channel_id, buf),
-            Frame::Data(data) => encode_data(data, buf),
-        }
+    pub fn send_frame(&self, data: BytesMut) -> impl Future<Item=Sender<Frame>,Error=SendError<Frame>>{
+        println!("Sending frame");
+        self.sink.clone()
+            .send(Frame::Data(data))
     }
-}
 
-
-fn encode_connect(host_id: String, channel_id: u16, buf: &mut BytesMut) -> Result<()> {
-    buf.reserve(5 + host_id.len());
-    buf.put_u8(1);
-    buf.put_u16::<BigEndian>(host_id.len() as u16);
-    buf.put_slice(host_id.as_bytes());
-    buf.put_u16::<BigEndian>(channel_id);
-    Ok(())
-}
-
-fn encode_data(data: BytesMut, buf: &mut BytesMut) -> Result<()> {
-    buf.reserve(3 + data.len());
-    buf.put_u8(2);
-    buf.put_u16::<BigEndian>(data.len() as u16);
-    buf.put_slice(&data);
-    Ok(())
-}
-
-fn parse_connect(buf: &mut BytesMut) -> Result<Option<Frame>> {
-    let len = BigEndian::read_u16(&buf.as_ref()[1..3]) as usize;
-    if buf.len() < len + 5 {
-        return Ok(None);
-    };
-    let host_id = String::from_utf8(buf.as_ref()[3..len+3].to_vec())
-        .map_err(|_| Error::new(ErrorKind::Other, "Invalid host identifier") )?;
-    let channel_id = BigEndian::read_u16(&buf.as_ref()[len+3..len+5]);
-    let _ = buf.split_to(len+5);
-    Ok(Some(Frame::Connect(host_id, channel_id)))
-}
-
-fn parse_data(buf: &mut BytesMut) -> Result<Option<Frame>> {
-    let len: usize = BigEndian::read_u16(&buf.as_ref()[1..3]) as usize;
-    if buf.len() < len + 5 {
-        return Ok(None);
-    };
-    let _ = buf.split_to(3);
-    Ok(Some(Frame::Data(buf.split_to(len))))
 }

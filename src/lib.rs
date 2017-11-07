@@ -17,6 +17,7 @@ extern crate tokio_openssl;
 mod transport;
 mod peer_information_base;
 mod unix_socket;
+mod unix_codec;
 mod configuration;
 mod state;
 mod id;
