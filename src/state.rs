@@ -284,24 +284,33 @@ impl State {
     }
 
     pub fn send_frame(&self, host_id: String, channel_id: u16, data: BytesMut) {
-        let state = self.read();
-        let connections = match state.connections.get(&host_id) {
-            Some(conns) => conns,
-            None => return println!("No connection for host id {}", host_id)
-        };
-        let connection = match connections.first() {
-            Some(conn) => conn,
-            None => return println!("No connection for host id {}", host_id)
-        };
-        let task = connection.send_frame(channel_id, data)
-            .then(|result| {
-                match result {
-                    Ok(_) => println!("Successfully sent frame"),
-                    Err(ref err) => println!("Error while sending frame: {}", err)
-                };
-                Ok(())
-            });
-        self.spawn(task);
+        if let Some(connection) = self.read().connections.get(&host_id).and_then(|c| c.first()) {
+            let task = connection.send_frame(channel_id, data)
+                .then(|result| {
+                    match result {
+                        Ok(_) => println!("Successfully sent frame"),
+                        Err(ref err) => println!("Error while sending frame: {}", err)
+                    };
+                    Ok(())
+                });
+            self.spawn(task);
+            return;
+        }
+        if let Some(addr) = self.read().pib.get_peer(&host_id).and_then(|peer| peer.addresses.first() ) {
+            let task = self.connect(host_id, addr.clone())
+                .and_then(move |connection| {
+                    connection.send_frame(channel_id, data)
+                        .then(|result| {
+                            match result {
+                                Ok(_) => println!("Successfully sent frame"),
+                                Err(ref err) => println!("Error while sending frame: {}", err)
+                            };
+                            Ok(())
+                        })
+                }).map_err(|err| warn!("Error while connecting: {}", err) );
+            self.spawn(task);
+        }
+
     }
 
     pub fn deliver_frame(&self, host_id: String, channel_id: u16, data: BytesMut) {
