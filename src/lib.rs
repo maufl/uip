@@ -13,6 +13,8 @@ extern crate serde;
 extern crate serde_derive;
 extern crate openssl;
 extern crate tokio_openssl;
+#[macro_use]
+extern crate log;
 
 mod transport;
 mod peer_information_base;

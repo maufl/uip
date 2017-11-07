@@ -16,6 +16,7 @@ impl Decoder for ControlProtocolCodec {
     type Error = Error;
 
     fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Frame>> {
+        debug!("Decoding UNIX message: {:?}", buf);
         if buf.len() < 3 {
             return Ok(None);
         }

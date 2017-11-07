@@ -4,6 +4,7 @@ extern crate serde_json;
 extern crate async_readline;
 extern crate bytes;
 extern crate futures;
+extern crate env_logger;
 
 extern crate uip;
 
@@ -20,8 +21,9 @@ use std::io::{Write,Error,ErrorKind};
 use std::net::SocketAddr;
 use bytes::BytesMut;
 
-
 fn main() {
+    env_logger::init().unwrap();
+
     let mut core = Core::new().unwrap();
     
     let config_file_path = if env::args().count() > 1 {

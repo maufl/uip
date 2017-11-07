@@ -19,15 +19,15 @@ impl UnixSocket {
     pub fn from_unix_socket(state: State, socket: Framed<UnixStream, ControlProtocolCodec>, host_id: String, channel_id: u16) -> UnixSocket {
         let (sink, stream) = socket.split();
         let (sender, receiver) = channel::<Frame>(10);
-        state.spawn(receiver.forward(sink.sink_map_err(|err| println!("Sink error: {}", err))).map(|_| ()).map_err(|err| println!("Forwarding error: {:?}", err)));
+        state.spawn(receiver.forward(sink.sink_map_err(|err| warn!("Sink error: {}", err))).map(|_| ()).map_err(|err| warn!("Forwarding error: {:?}", err)));
         let state2 = state.clone();
         let done = stream.for_each(move |frame| {
             match frame {
                 Frame::Data(buf) => state2.send_frame(host_id.clone(), channel_id, buf),
-                Frame::Connect(_,_) => {}
+                Frame::Connect(_,_) => { warn!("Unexpected UNIX message CONNECT") }
             };
             future::ok(())
-        }).map_err(|err| println!("Unix stream error: {}", err));
+        }).map_err(|err| warn!("Unix stream error: {}", err));
         state.spawn(done);
         let unix_socket = UnixSocket {
             state: state.clone(),

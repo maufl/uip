@@ -35,7 +35,7 @@ fn main() {
         data.put_u16::<BigEndian>(line.len() as u16);
         data.put_slice(line.as_bytes());
         socket.write(&data).expect("Unable to write to socket");
-        let mut buf = [0u8;1500];
-        socket.read(&mut buf).expect("Unable to read from socket");
+        //let mut buf = [0u8;1500];
+        //socket.read(&mut buf).expect("Unable to read from socket");
     }
 }
