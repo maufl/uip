@@ -38,11 +38,11 @@ fn main() {
                 return println!("Error while reading configuration file: {}", err);
             }
         };
-        State::from_configuration(config, core.handle()).unwrap()
+        State::from_configuration(config, core.handle())
     } else {
         println!("Generating new ID");
         let id = Id::generate().expect("Unable to generate an ID");
-        State::from_id(id, core.handle()).unwrap()
+        State::from_id(id, core.handle())
     };
     println!("Starting client for ID {}", state.read().id.hash);
 
@@ -68,7 +68,7 @@ fn main() {
                 let id = args.nth(2).expect("Peer id required").to_string();
                 let addr = args.next().expect("Peer address required");
                 let sock_addr: SocketAddr = addr.parse().expect("Invalid socket address");
-                state2.add_peer_address(id, sock_addr);
+                state2.write().network.add_peer_address(id, sock_addr);
             }
         } else if command.starts_with("relay add") {
             let mut args = command.split_whitespace();
@@ -76,8 +76,8 @@ fn main() {
                 println!("relay add requires ID")
             } else {
                 let id = args.nth(2).expect("Peer id required").to_string();
-                state2.add_relay(id);
-                state2.connect_to_relays();
+                state2.write().network.add_relay(id);
+                state2.write().network.connect_to_relays();
             }
         } else if command.starts_with("send ") {
             let mut args = command.split_whitespace();

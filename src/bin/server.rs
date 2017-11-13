@@ -29,11 +29,11 @@ fn main() {
             Ok(c) => c,
             Err(err) => return println!("{}", err)
         };
-        State::from_configuration(config, core.handle()).unwrap()
+        State::from_configuration(config, core.handle())
     } else {
         println!("Generating new ID");
         let id = Id::generate().expect("Unable to generate an ID");
-        State::from_id(id, core.handle()).unwrap()
+        State::from_id(id, core.handle())
     };
     let stdin = std::io::stdin();
     let file = tokio_file_unix::StdFile(stdin.lock());

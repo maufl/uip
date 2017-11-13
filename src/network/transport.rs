@@ -7,7 +7,7 @@ use futures::sync::mpsc::{Sender,SendError,channel};
 use bytes::{BytesMut, BufMut, BigEndian as BytesBigEndian};
 use byteorder::{BigEndian,ByteOrder};
 use tokio_openssl::SslStream;
-use state::State;
+use network::NetworkState;
 
 pub enum Frame {
     Ping,
@@ -66,12 +66,12 @@ impl Decoder for Codec {
 
 #[derive(Clone)]
 pub struct Transport {
-    state: State,
+    state: NetworkState,
     sink: Sender<Frame>,
 }
 
 impl Transport {
-    pub fn from_tls_stream(state: State, stream: SslStream<TcpStream>, remote_id: String) -> Transport {
+    pub fn from_tls_stream(state: NetworkState, stream: SslStream<TcpStream>, remote_id: String) -> Transport {
         let (sink, stream) = stream.framed(Codec()).split();
         let (sender, receiver) = channel::<Frame>(10);
         let done = receiver.forward(sink.sink_map_err(|err| println!("Unexpected sink error: {}", err) ))
