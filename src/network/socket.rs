@@ -1,4 +1,6 @@
 use tokio_core::net::{UdpSocket};
+use tokio_core::reactor::{Handle};
+use tokio_io::{AsyncRead,AsyncWrite};
 use futures::sync::mpsc::{channel,Sender,Receiver};
 use futures::{Poll,Async,Stream,Sink};
 use std::sync::{Arc,RwLock,RwLockReadGuard,RwLockWriteGuard};
@@ -34,6 +36,8 @@ impl Read for Connection {
     }
 }
 
+impl AsyncRead for Connection {}
+
 impl Write for Connection {
     fn write(&mut self, buf: &[u8]) -> Result<usize> {
         self.socket.send_to(buf, &self.addr)
@@ -41,6 +45,12 @@ impl Write for Connection {
 
     fn flush(&mut self) -> Result<()> {
         Ok(())
+    }
+}
+
+impl AsyncWrite for Connection {
+    fn shutdown(&mut self) -> Poll<(),Error> {
+        Ok(Async::Ready(()))
     }
 }
 
@@ -53,6 +63,11 @@ struct Socket {
 pub struct SharedSocket(Arc<RwLock<Socket>>);
 
 impl SharedSocket {
+
+    pub fn bind(addr: &SocketAddr, handle: &Handle) -> Result<SharedSocket> {
+        UdpSocket::bind(addr, handle)
+            .map(|s| SharedSocket::from_socket(s))
+    }
 
     pub fn from_socket(sock: UdpSocket) -> SharedSocket {
         SharedSocket(Arc::new(RwLock::new(Socket{
@@ -69,6 +84,10 @@ impl SharedSocket {
         self.0.write().expect("Unable to acquire write lock on state")
     }
 
+    pub fn local_addr(&self) -> Result<SocketAddr> {
+        self.read().inner.local_addr()
+    }
+
     pub fn send_to(&self, buf: &[u8], remote: &SocketAddr) -> Result<usize> {
         self.write().inner.send_to(buf,remote)
     }
@@ -79,6 +98,12 @@ impl SharedSocket {
 
     pub fn incoming(&self) -> impl Stream<Item=Connection,Error=Error> {
         IncomingUdpConnections{ socket: self.clone() }
+    }
+
+    pub fn connect(&self, addr: SocketAddr) -> Result<Connection> {
+        let (destination, source) = channel::<Vec<u8>>(10);
+        self.write().connections.insert(addr, destination);
+        Ok(Connection::new(source, addr, self.clone()))
     }
 
     pub fn forward_or_new_connection(&self, buf: &[u8], remote: SocketAddr) -> Option<Connection> {

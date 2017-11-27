@@ -1,6 +1,6 @@
 use tokio_core::net::TcpStream;
 use tokio_io::codec::{Encoder,Decoder};
-use tokio_io::{AsyncRead};
+use tokio_io::{AsyncRead,AsyncWrite};
 use std::io::{Error,ErrorKind};
 use futures::{Stream,Sink,Future};
 use futures::sync::mpsc::{Sender,SendError,channel};
@@ -71,7 +71,8 @@ pub struct Transport {
 }
 
 impl Transport {
-    pub fn from_tls_stream(state: NetworkState, stream: SslStream<TcpStream>, remote_id: String) -> Transport {
+    pub fn from_tls_stream<S>(state: NetworkState, stream: SslStream<S>, remote_id: String) -> Transport
+        where S: AsyncRead + AsyncWrite + 'static {
         let (sink, stream) = stream.framed(Codec()).split();
         let (sender, receiver) = channel::<Frame>(10);
         let done = receiver.forward(sink.sink_map_err(|err| println!("Unexpected sink error: {}", err) ))

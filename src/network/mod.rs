@@ -6,3 +6,4 @@ mod socket;
 use self::local_address::LocalAddress;
 pub use self::state::NetworkState;
 use self::transport::Transport;
+pub use self::socket::SharedSocket;

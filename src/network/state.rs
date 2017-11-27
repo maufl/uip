@@ -2,11 +2,11 @@ use std::net::{SocketAddr};
 use std::collections::HashMap;
 use std::sync::{Arc,RwLock,RwLockReadGuard,RwLockWriteGuard};
 use interfaces::{Interface,Kind};
-use futures::{Future,Poll,Async,future,Stream,Sink};
+use futures::{Future,IntoFuture,Poll,Async,future,Stream,Sink};
 use futures::sync::mpsc::{Sender};
 use tokio_core::net::{TcpListener,TcpStream};
 use tokio_core::reactor::{Handle};
-use tokio_io::{AsyncRead};
+use tokio_io::{AsyncRead,AsyncWrite};
 use bytes::BytesMut;
 use openssl::hash::{hash2,MessageDigest};
 use openssl::x509::{X509};
@@ -20,7 +20,7 @@ use std::error::Error;
 
 use peer_information_base::{Peer,PeerInformationBase};
 use id::Id;
-use network::{Transport,LocalAddress};
+use network::{Transport,LocalAddress,SharedSocket};
 use state::State;
 
 pub struct InnerState {
@@ -32,6 +32,7 @@ pub struct InnerState {
     pub port: u16,
     handle: Handle,
     upstream: Sender<(String, u16, BytesMut)>,
+    socket: SharedSocket,
 }
 
 #[derive(Clone)]
@@ -39,6 +40,8 @@ pub struct NetworkState(Arc<RwLock<InnerState>>);
 
 impl NetworkState {
     pub fn new(id: Id, pib: PeerInformationBase, relays: Vec<String>, port: u16, handle: Handle, upstream: Sender<(String, u16, BytesMut)>) -> NetworkState {
+        let addr: SocketAddr = format!("0.0.0.0:{}", port).parse().expect("Unable to parse local address");
+        let socket = SharedSocket::bind(&addr, &handle).expect("Unable to bind to local address");
         NetworkState(Arc::new(RwLock::new(InnerState{ 
             id: id,
             pib: pib,
@@ -48,6 +51,7 @@ impl NetworkState {
             port: port,
             handle: handle,
             upstream: upstream,
+            socket: socket,
         })))
     }
     pub fn read(&self) -> RwLockReadGuard<InnerState> {
@@ -122,17 +126,16 @@ impl NetworkState {
         let acceptor = {
             let id = &self.read().id;
             let empty_chain: Stack<X509> = Stack::new().expect("unable to build empty cert chain");
-            let mut builder = SslAcceptorBuilder::mozilla_modern(SslMethod::tls(), &id.key, id.cert.as_ref(), empty_chain.as_ref()).expect("Unable to build new SSL acceptor");
+            let mut builder = SslAcceptorBuilder::mozilla_modern(SslMethod::dtls(), &id.key, id.cert.as_ref(), empty_chain.as_ref()).expect("Unable to build new SSL acceptor");
             builder.builder_mut().set_verify_callback(SSL_VERIFY_PEER, |_valid, context| context.current_cert().is_some() );
             builder.build()
         };
-        let addr: SocketAddr = format!("0.0.0.0:{}", &self.read().port).parse().expect("Unable to parse local address");
-        let listener = TcpListener::bind(&addr, &self.read().handle).expect("Unable to bind to local address");
+        let listener = self.read().socket.clone();
         let local_addr = listener.local_addr().expect("Not bound to a local address");
         println!("Listening on address {}", local_addr);
         self.write().port = local_addr.port();
         let task = listener.incoming()
-            .for_each(move |(stream, _address)| {
+            .for_each(move |stream| {
                 let state2 = state.clone();
                 acceptor.accept_async(stream)
                     .map_err(|err| err.description().to_string() )
@@ -147,7 +150,8 @@ impl NetworkState {
         self.spawn(task);
     }
 
-    fn accept_connection(&self, connection: SslStream<TcpStream>) -> Result<(), String> {
+    fn accept_connection<S>(&self, connection: SslStream<S>) -> Result<(), String>
+        where S: AsyncRead + AsyncWrite + 'static {
         let id = {
             let session = connection.get_ref().ssl();
              let x509 = session.peer_certificate()
@@ -172,7 +176,7 @@ impl NetworkState {
 
     fn connect(&self, id: String, addr: SocketAddr) -> impl Future<Item=Transport, Error=io::Error> {
         let connector = {
-            let mut builder = SslConnectorBuilder::new(SslMethod::tls()).expect("Unable to build new SSL connector");
+            let mut builder = SslConnectorBuilder::new(SslMethod::dtls()).expect("Unable to build new SSL connector");
             builder.builder_mut().set_verify(SslVerifyMode::empty());
             builder.builder_mut().set_certificate(&self.read().id.cert).expect("Unable to get reference to client certificate");
             builder.builder_mut().set_private_key(&self.read().id.key).expect("Unable to get a reference to the client key");
@@ -180,7 +184,8 @@ impl NetworkState {
         };
         let state = self.clone();
         let id2 = id.clone();
-        TcpStream::connect(&addr, &self.read().handle)
+        self.read().socket.connect(addr)
+            .into_future()
             .and_then(move |stream| {
                 connector.connect_async(id.as_ref(), stream)
                     .map_err(|err| io::Error::new(io::ErrorKind::Other, format!("Handshake error: {:?}", err)) )

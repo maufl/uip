@@ -156,6 +156,6 @@ impl Future for State {
 
     fn poll(&mut self) -> Poll<(), ()> {
         self.open_ctl_socket();
-        Ok(Async::NotReady)
+        self.write().network.poll()
     }
 }
