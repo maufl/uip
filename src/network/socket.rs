@@ -2,13 +2,13 @@ use tokio_core::net::{UdpSocket};
 use tokio_core::reactor::{Handle};
 use tokio_io::{AsyncRead,AsyncWrite};
 use futures::sync::mpsc::{channel,Sender,Receiver};
-use futures::{Poll,Async,Stream,Sink};
+use futures::{Future,Poll,Async,Stream,Sink};
 use std::sync::{Arc,RwLock,RwLockReadGuard,RwLockWriteGuard};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::io::{Read,Write,Result,Error,ErrorKind};
 
-struct Connection {
+pub struct Connection {
     incoming: Receiver<Vec<u8>>,
     addr: SocketAddr,
     socket: SharedSocket,
@@ -57,6 +57,7 @@ impl AsyncWrite for Connection {
 struct Socket {
     inner: UdpSocket,
     connections: HashMap<SocketAddr, Sender<Vec<u8>>>,
+    handle: Handle,
 }
 
 #[derive(Clone)]
@@ -66,13 +67,14 @@ impl SharedSocket {
 
     pub fn bind(addr: &SocketAddr, handle: &Handle) -> Result<SharedSocket> {
         UdpSocket::bind(addr, handle)
-            .map(|s| SharedSocket::from_socket(s))
+            .map(|s| SharedSocket::from_socket(s, handle.clone()))
     }
 
-    pub fn from_socket(sock: UdpSocket) -> SharedSocket {
+    pub fn from_socket(sock: UdpSocket, handle: Handle) -> SharedSocket {
         SharedSocket(Arc::new(RwLock::new(Socket{
             inner: sock,
-            connections: HashMap::new()
+            connections: HashMap::new(),
+            handle: handle
         })))
     }
 
@@ -109,11 +111,15 @@ impl SharedSocket {
     pub fn forward_or_new_connection(&self, buf: &[u8], remote: SocketAddr) -> Option<Connection> {
         let mut socket = self.write();
         if let Some(destination) = socket.connections.get(&remote) {
-            destination.clone().send(buf.into());
+            let task = destination.clone().send(buf.into())
+                .map(|_| ()).map_err(|_| println!("Error when forwarding datagram") );
+            socket.handle.spawn(task);
             return None
         }
         let (destination, source) = channel::<Vec<u8>>(10);
-        destination.clone().send(buf.into());
+        let task = destination.clone().send(buf.into())
+            .map(|_| ()).map_err(|_| println!("Error when forwarding datagram") );
+        socket.handle.spawn(task);
         socket.connections.insert(remote, destination);
         Some(Connection::new(source, remote, self.clone()))
     }

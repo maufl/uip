@@ -1,4 +1,3 @@
-use tokio_core::net::TcpStream;
 use tokio_io::codec::{Encoder,Decoder};
 use tokio_io::{AsyncRead,AsyncWrite};
 use std::io::{Error,ErrorKind};

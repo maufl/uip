@@ -1,26 +1,17 @@
-use std::net::{SocketAddr};
 use std::collections::HashMap;
 use std::sync::{Arc,RwLock,RwLockReadGuard,RwLockWriteGuard};
-use interfaces::{Interface,Kind};
 use futures::{Future,Poll,Async,future,Stream};
-use futures::sync::mpsc::{channel,Receiver};
-use tokio_core::net::{TcpListener,TcpStream};
+use futures::sync::mpsc::{channel};
 use tokio_core::reactor::{Handle};
 use tokio_uds::{UnixListener};
 use tokio_io::{AsyncRead};
 use bytes::BytesMut;
-use openssl::hash::{hash2,MessageDigest};
-use openssl::x509::{X509};
-use openssl::ssl::{SslConnectorBuilder,SslAcceptorBuilder, SslMethod, SslVerifyMode,SSL_VERIFY_PEER};
-use openssl::stack::Stack;
-use tokio_openssl::{SslStream,SslConnectorExt,SslAcceptorExt};
 use std::io;
 use std::path::Path;
 use std::fs;
-use std::error::Error;
 
 use network::{NetworkState};
-use peer_information_base::{Peer,PeerInformationBase};
+use peer_information_base::{PeerInformationBase};
 use configuration::{Configuration};
 use unix_codec::{ControlProtocolCodec,Frame};
 use unix_socket::{UnixSocket};

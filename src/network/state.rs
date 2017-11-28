@@ -4,7 +4,6 @@ use std::sync::{Arc,RwLock,RwLockReadGuard,RwLockWriteGuard};
 use interfaces::{Interface,Kind};
 use futures::{Future,IntoFuture,Poll,Async,future,Stream,Sink};
 use futures::sync::mpsc::{Sender};
-use tokio_core::net::{TcpListener,TcpStream};
 use tokio_core::reactor::{Handle};
 use tokio_io::{AsyncRead,AsyncWrite};
 use bytes::BytesMut;
@@ -14,14 +13,11 @@ use openssl::ssl::{SslConnectorBuilder,SslAcceptorBuilder, SslMethod, SslVerifyM
 use openssl::stack::Stack;
 use tokio_openssl::{SslStream,SslConnectorExt,SslAcceptorExt};
 use std::io;
-use std::path::Path;
-use std::fs;
 use std::error::Error;
 
 use peer_information_base::{Peer,PeerInformationBase};
 use id::Id;
 use network::{Transport,LocalAddress,SharedSocket};
-use state::State;
 
 pub struct InnerState {
     pub id: Id,
@@ -199,7 +195,7 @@ impl NetworkState {
 
     pub fn deliver_frame(&self, host_id: String, channel_id: u16, data: BytesMut) {
         let task = self.read().upstream.clone().send((host_id, channel_id, data))
-            .map(|_| ()).map_err(|err| warn!("Failed to pass message to upstream") );
+            .map(|_| ()).map_err(|err| warn!("Failed to pass message to upstream: {}", err) );
         self.read().handle.spawn(task);
     }
 
