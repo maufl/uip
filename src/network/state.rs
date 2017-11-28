@@ -132,6 +132,7 @@ impl NetworkState {
         self.write().port = local_addr.port();
         let task = listener.incoming()
             .for_each(move |stream| {
+                debug!("Accepting new UDP connection from: {}", stream.local_addr().expect("Impossible"));
                 let state2 = state.clone();
                 acceptor.accept_async(stream)
                     .map_err(|err| err.description().to_string() )
@@ -142,7 +143,7 @@ impl NetworkState {
                         }
                         Ok(())
                     })
-            }).map_err(|err| println!("TLS listener died: {}", err) );
+            }).map_err(|_| println!("DTLS listener died") );
         self.spawn(task);
     }
 

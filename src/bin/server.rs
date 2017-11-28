@@ -4,6 +4,7 @@ extern crate serde_json;
 extern crate tokio_file_unix;
 extern crate tokio_io;
 extern crate futures;
+extern crate env_logger;
 
 extern crate uip;
 
@@ -18,6 +19,8 @@ use futures::stream::Stream;
 use std::io::{Error, ErrorKind};
 
 fn main() {
+    env_logger::init().unwrap();
+    
     let mut core = Core::new().unwrap();
     let config_file_path = if env::args().count() > 1 {
         env::args().skip(1).next().expect("No config file given")

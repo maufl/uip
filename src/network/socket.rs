@@ -2,6 +2,7 @@ use tokio_core::net::{UdpSocket};
 use tokio_core::reactor::{Handle};
 use tokio_io::{AsyncRead,AsyncWrite};
 use futures::sync::mpsc::{channel,Sender,Receiver};
+use futures::stream::{poll_fn};
 use futures::{Future,Poll,Async,Stream,Sink};
 use std::sync::{Arc,RwLock,RwLockReadGuard,RwLockWriteGuard};
 use std::collections::HashMap;
@@ -23,6 +24,10 @@ impl Connection {
             socket: socket
         }
     }
+
+    pub fn local_addr(&self) -> Result<SocketAddr> {
+        Ok(self.addr.clone())
+    }
 }
 
 impl Read for Connection {
@@ -31,7 +36,10 @@ impl Read for Connection {
         match async {
             Async::NotReady => Err(Error::new(ErrorKind::WouldBlock,"no bytes ready")),
             Async::Ready(None) => Err(Error::new(ErrorKind::UnexpectedEof,"end of file")),
-            Async::Ready(Some(recv)) => buf.write(recv.as_slice())
+            Async::Ready(Some(recv)) => {
+                buf[..recv.len()].clone_from_slice(recv.as_slice());
+                Ok(recv.len())
+            }
         }
     }
 }
@@ -58,6 +66,7 @@ struct Socket {
     inner: UdpSocket,
     connections: HashMap<SocketAddr, Sender<Vec<u8>>>,
     handle: Handle,
+    incoming: Receiver<Connection>,
 }
 
 #[derive(Clone)]
@@ -71,11 +80,34 @@ impl SharedSocket {
     }
 
     pub fn from_socket(sock: UdpSocket, handle: Handle) -> SharedSocket {
-        SharedSocket(Arc::new(RwLock::new(Socket{
+        let (sender, receiver) = channel::<Connection>(10);
+        let socket = SharedSocket(Arc::new(RwLock::new(Socket{
             inner: sock,
             connections: HashMap::new(),
-            handle: handle
-        })))
+            handle: handle.clone(),
+            incoming: receiver,
+        })));
+        let socket_clone = socket.clone();
+        let handle_clone = handle.clone();
+        let task = poll_fn(move || {
+            let mut datagram = [0u8; 1500];
+            let (read, addr) = match socket_clone.recv_from(&mut datagram) {
+                Err(e) => return match e.kind() {
+                    ErrorKind::WouldBlock => Ok(Async::NotReady),
+                    ErrorKind::UnexpectedEof => Ok(Async::Ready(None)),
+                    _ => { warn!("Error while reading from socket: {}", e); Err(()) }
+                },
+                Ok(d) => d
+            };
+            if let Some(connection) = socket_clone.forward_or_new_connection(&datagram[0..read], addr) {
+                let task = sender.clone().send(connection)
+                    .map(|_| ()).map_err(|err| warn!("Unable to forward new UDP connection: {}", err) );
+                handle_clone.spawn(task);
+            }
+            Ok(Async::Ready(Some(())))
+        }).collect().map(|_| ());
+        handle.spawn(task);
+        socket
     }
 
     fn read(&self) -> RwLockReadGuard<Socket> {
@@ -98,7 +130,7 @@ impl SharedSocket {
         self.write().inner.recv_from(buf)
     }
 
-    pub fn incoming(&self) -> impl Stream<Item=Connection,Error=Error> {
+    pub fn incoming(&self) -> impl Stream<Item=Connection,Error=()> {
         IncomingUdpConnections{ socket: self.clone() }
     }
 
@@ -131,22 +163,9 @@ struct IncomingUdpConnections {
 
 impl Stream for IncomingUdpConnections {
     type Item = Connection;
-    type Error = Error;
+    type Error = ();
 
-    fn poll(&mut self) -> Poll<Option<Connection>, Error> {
-        let mut datagram = [0u8; 1500];
-        let (read, addr) = match self.socket.recv_from(&mut datagram) {
-            Err(e) => return match e.kind() {
-                ErrorKind::WouldBlock => Ok(Async::NotReady),
-                ErrorKind::UnexpectedEof => Ok(Async::Ready(None)),
-                _ => Err(e)
-            },
-            Ok(d) => d
-        };
-        if let Some(connection) = self.socket.forward_or_new_connection(&datagram[0..read], addr) {
-            Ok(Async::Ready(Some(connection)))
-        } else {
-            Ok(Async::NotReady)
-        }
+    fn poll(&mut self) -> Poll<Option<Connection>, ()> {
+        self.socket.write().incoming.poll()
     }
 }
