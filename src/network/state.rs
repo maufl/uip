@@ -2,6 +2,7 @@ use std::net::{SocketAddr};
 use std::collections::HashMap;
 use std::sync::{Arc,RwLock,RwLockReadGuard,RwLockWriteGuard};
 use interfaces::{Interface,Kind};
+use interfaces::flags::{IFF_RUNNING};
 use futures::{Future,IntoFuture,Poll,Async,future,Stream,Sink};
 use futures::sync::mpsc::{Sender};
 use tokio_core::reactor::{Handle};
@@ -18,6 +19,7 @@ use std::error::Error;
 use peer_information_base::{Peer,PeerInformationBase};
 use id::Id;
 use network::{Transport,LocalAddress,SharedSocket};
+use network::discovery::discover_addresses;
 
 pub struct InnerState {
     pub id: Id,
@@ -64,27 +66,11 @@ impl NetworkState {
 
 
     fn discover_addresses(&self) -> () {
-        let mut state = self.write();
-        let interfaces = match Interface::get_all()  {
-            Ok(i) => i,
-            Err(_) => return,
-        };
-        state.addresses.clear();
-        for interface in interfaces {
-            if interface.is_loopback() || !interface.is_up() {
-                continue
-            }
-            for address in &interface.addresses {
-                let addr = match address.addr {
-                    Some(addr) => addr,
-                    None => continue,
-                };
-                if address.kind == Kind::Ipv4 || address.kind == Kind::Ipv6 {
-                    state.addresses
-                        .push(LocalAddress::new(interface.name.clone(), addr, None))
-                }
-            }
-        };
+        if let Ok(mut addresses) = discover_addresses() {
+            let mut state = self.write();
+            state.addresses.clear();
+            state.addresses.append(&mut addresses);
+        }
     }
 
     fn lookup_peer_address(&self, id: &str) -> Option<SocketAddr> {
@@ -110,7 +96,7 @@ impl NetworkState {
             };
             let relay = relay.clone();
             println!("Connecting to relay {}", relay);
-            let future = self.connect(relay.clone(), addr)
+            let future = self.open_transport(relay.clone(), addr)
                 .and_then(|_| future::ok(()) )
                 .map_err(move |err| println!("Unable to connect to peer {}: {}", relay, err) );
             self.spawn(future);
@@ -171,7 +157,14 @@ impl NetworkState {
             .push(conn);
     }
 
-    fn connect(&self, id: String, addr: SocketAddr) -> impl Future<Item=Transport, Error=io::Error> {
+    fn connect(&self, remote_id: String) -> impl Future<Item=Transport, Error=io::Error> {
+        let state = self.clone();
+        self.lookup_peer_address(&remote_id)
+            .ok_or(io::Error::new(io::ErrorKind::NotFound, "peer address not found")).into_future()
+            .and_then(move |addr| state.open_transport(remote_id, addr) )
+    }
+
+    fn open_transport(&self, id: String, addr: SocketAddr) -> impl Future<Item=Transport, Error=io::Error> {
         let connector = {
             let mut builder = SslConnectorBuilder::new(SslMethod::dtls()).expect("Unable to build new SSL connector");
             builder.builder_mut().set_verify(SslVerifyMode::empty());
@@ -201,33 +194,20 @@ impl NetworkState {
     }
 
     pub fn send_frame(&self, host_id: String, channel_id: u16, data: BytesMut) {
-        if let Some(connection) = self.read().connections.get(&host_id).and_then(|c| c.first()) {
-            let task = connection.send_frame(channel_id, data)
-                .then(|result| {
-                    match result {
-                        Ok(_) => println!("Successfully sent frame"),
-                        Err(ref err) => println!("Error while sending frame: {}", err)
-                    };
-                    Ok(())
-                });
-            self.spawn(task);
-            return;
-        }
-        if let Some(addr) = self.read().pib.get_peer(&host_id).and_then(|peer| peer.addresses.first() ) {
-            let task = self.connect(host_id, addr.clone())
-                .and_then(move |connection| {
-                    connection.send_frame(channel_id, data)
-                        .then(|result| {
-                            match result {
-                                Ok(_) => println!("Successfully sent frame"),
-                                Err(ref err) => println!("Error while sending frame: {}", err)
-                            };
-                            Ok(())
-                        })
-                }).map_err(|err| warn!("Error while connecting: {}", err) );
-            self.spawn(task);
-        }
+        let task = self.get_connection(host_id)
+            .and_then(move |connection| {
+                connection.send_frame(channel_id, data)
+                    .map_err(|err| io::Error::new(io::ErrorKind::BrokenPipe, "unable to forward frame"))
+            }).map(|_| {}).map_err(|err| warn!("Error while sending frame: {}", err) );
+        self.spawn(task);
+    }
 
+    pub fn get_connection(&self, host_id: String) -> impl Future<Item=Transport, Error=io::Error> {
+        let state = self.clone();
+        self.read().connections.get(&host_id)
+            .and_then(|cs| cs.first()).map(|c| c.clone() )
+            .ok_or(()).into_future()
+            .or_else(move |_| state.connect(host_id) )
     }
 }
 

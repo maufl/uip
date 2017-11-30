@@ -3,6 +3,7 @@ extern crate tokio_core;
 extern crate serde_json;
 extern crate tokio_file_unix;
 extern crate tokio_io;
+extern crate tokio_signal;
 extern crate futures;
 extern crate env_logger;
 
@@ -16,6 +17,7 @@ use std::fs::File;
 use std::path::Path;
 use std::env;
 use futures::stream::Stream;
+use futures::{Future,IntoFuture};
 use std::io::{Error, ErrorKind};
 
 fn main() {
@@ -44,16 +46,9 @@ fn main() {
     let file = file.into_reader(&core.handle()).unwrap();
     println!("Starting client for ID {}", state.read().id.hash);
     core.handle().spawn(state.clone());
-    let _ = core.run(tokio_io::io::lines(file).for_each(|line| {
-        if line.trim() == "exit" {
-            if let Err(err) = write_configuration(config_file_path.as_ref(), &state.to_configuration()) {
-                println!("Error while saving configuration: {}", err);
-            };
-            Err(Error::new(ErrorKind::Other, "Closing programm"))
-        } else {
-            Ok(())
-        }
-    }));
+    let handle = core.handle();
+    core.run(tokio_signal::ctrl_c(&handle).flatten_stream().into_future().map(|_| println!("Received CTRL-C") ).map_err(|_| println!("Panic") ) );
+    write_configuration(&config_file_path, &state.to_configuration());
 }
 
 fn read_configuration(path: String) -> Result<Configuration, String> {

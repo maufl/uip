@@ -1,5 +1,6 @@
 #![feature(conservative_impl_trait)]
 extern crate tokio_core;
+extern crate tokio_signal;
 extern crate serde_json;
 extern crate async_readline;
 extern crate bytes;
@@ -15,7 +16,7 @@ use uip::Id;
 use tokio_core::reactor::{Core};
 use std::fs::File;
 use std::path::Path;
-use futures::{Stream};
+use futures::{Future,Stream};
 use std::env;
 use std::io::{Write,Error,ErrorKind};
 use std::net::SocketAddr;
@@ -94,8 +95,9 @@ fn main() {
         let _ = write!(v, "\n> ");
         v.append(&mut line.line.clone());
         Ok(v)
-    }).forward(rl_writer);
-    let _ = core.run(done);
+    }).forward(rl_writer).map(|_| () ).map_err(|err| println!("{}", err) );
+    let ctrl_future = tokio_signal::ctrl_c(&core.handle()).flatten_stream().into_future().map(|_| println!("Received CTRL-C") ).map_err(|_| println!("Panic") );
+    let _ = core.run(done.select(ctrl_future));
 }
 
 fn read_configuration(path: &String) -> Result<Configuration, String> {
