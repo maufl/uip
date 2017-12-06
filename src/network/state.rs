@@ -1,8 +1,6 @@
 use std::net::{SocketAddr};
 use std::collections::HashMap;
 use std::sync::{Arc,RwLock,RwLockReadGuard,RwLockWriteGuard};
-use interfaces::{Interface,Kind};
-use interfaces::flags::{IFF_RUNNING};
 use futures::{Future,IntoFuture,Poll,Async,future,Stream,Sink};
 use futures::sync::mpsc::{Sender};
 use tokio_core::reactor::{Handle};
@@ -26,11 +24,10 @@ pub struct InnerState {
     pub pib: PeerInformationBase,
     connections: HashMap<String, Vec<Transport>>,
     pub relays: Vec<String>,
-    addresses: Vec<LocalAddress>,
     pub port: u16,
     handle: Handle,
     upstream: Sender<(String, u16, BytesMut)>,
-    socket: SharedSocket,
+    sockets: HashMap<LocalAddress, SharedSocket>,
 }
 
 #[derive(Clone)]
@@ -38,18 +35,15 @@ pub struct NetworkState(Arc<RwLock<InnerState>>);
 
 impl NetworkState {
     pub fn new(id: Id, pib: PeerInformationBase, relays: Vec<String>, port: u16, handle: Handle, upstream: Sender<(String, u16, BytesMut)>) -> NetworkState {
-        let addr: SocketAddr = format!("0.0.0.0:{}", port).parse().expect("Unable to parse local address");
-        let socket = SharedSocket::bind(&addr, &handle).expect("Unable to bind to local address");
         NetworkState(Arc::new(RwLock::new(InnerState{ 
             id: id,
             pib: pib,
             connections: HashMap::new(),
             relays: relays,
-            addresses: Vec::new(),
             port: port,
             handle: handle,
             upstream: upstream,
-            socket: socket,
+            sockets: HashMap::new(),
         })))
     }
     pub fn read(&self) -> RwLockReadGuard<InnerState> {
@@ -64,12 +58,17 @@ impl NetworkState {
         self.read().handle.spawn(f)
     }
 
-
-    fn discover_addresses(&self) -> () {
-        if let Ok(mut addresses) = discover_addresses() {
-            let mut state = self.write();
-            state.addresses.clear();
-            state.addresses.append(&mut addresses);
+    fn open_sockets(&self) -> () {
+        for address in discover_addresses().expect("Unable to list interfaces") {
+            if self.read().sockets.contains_key(&address) {
+                continue;
+            };
+            let mut addr: SocketAddr = address.internal_address.clone();
+            addr.set_port(self.read().port);
+            debug!("Opening new socket on address {}", addr);
+            let socket = SharedSocket::bind(&addr, &self.read().handle).expect("Unable to bind to local address");
+            self.write().sockets.insert(address, socket.clone());
+            self.listen(socket);
         }
     }
 
@@ -103,7 +102,7 @@ impl NetworkState {
         }
     }
 
-    fn listen(&self) {
+    fn listen(&self, listener: SharedSocket) {
         let state = self.clone();
         let acceptor = {
             let id = &self.read().id;
@@ -112,9 +111,7 @@ impl NetworkState {
             builder.builder_mut().set_verify_callback(SSL_VERIFY_PEER, |_valid, context| context.current_cert().is_some() );
             builder.build()
         };
-        let listener = self.read().socket.clone();
         let local_addr = listener.local_addr().expect("Not bound to a local address");
-        println!("Listening on address {}", local_addr);
         self.write().port = local_addr.port();
         let task = listener.incoming()
             .for_each(move |stream| {
@@ -174,7 +171,8 @@ impl NetworkState {
         };
         let state = self.clone();
         let id2 = id.clone();
-        self.read().socket.connect(addr)
+        self.read().sockets.values().next().ok_or(io::Error::new(io::ErrorKind::NotConnected, "Currently not connected"))
+            .and_then(|socket| socket.connect(addr) )
             .into_future()
             .and_then(move |stream| {
                 connector.connect_async(id.as_ref(), stream)
@@ -190,14 +188,14 @@ impl NetworkState {
     pub fn deliver_frame(&self, host_id: String, channel_id: u16, data: BytesMut) {
         let task = self.read().upstream.clone().send((host_id, channel_id, data))
             .map(|_| ()).map_err(|err| warn!("Failed to pass message to upstream: {}", err) );
-        self.read().handle.spawn(task);
+        self.spawn(task);
     }
 
     pub fn send_frame(&self, host_id: String, channel_id: u16, data: BytesMut) {
         let task = self.get_connection(host_id)
             .and_then(move |connection| {
                 connection.send_frame(channel_id, data)
-                    .map_err(|err| io::Error::new(io::ErrorKind::BrokenPipe, "unable to forward frame"))
+                    .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "unable to forward frame"))
             }).map(|_| {}).map_err(|err| warn!("Error while sending frame: {}", err) );
         self.spawn(task);
     }
@@ -216,9 +214,8 @@ impl Future for NetworkState {
     type Error = ();
 
     fn poll(&mut self) -> Poll<(), ()> {
-        self.discover_addresses();
+        self.open_sockets();
         self.connect_to_relays();
-        self.listen();
         Ok(Async::NotReady)
     }
 }

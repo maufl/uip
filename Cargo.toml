@@ -4,7 +4,8 @@ version = "0.1.0"
 authors = ["Felix Konstantin Maurer <maufl@maufl.de>"]
 
 [dependencies]
-interfaces = "0.0.2"
+#interfaces = "0.0.2"
+interfaces = { git = "https://github.com/maufl/interfaces-rs.git", branch = "fix-flowinfo-and-scope_id" }
 bytes = "0.4.4"
 byteorder = "1.0.0"
 igd = "0.6.0"

@@ -1,10 +1,10 @@
 use std::net::{SocketAddr};
 
-#[allow(dead_code)]
+#[derive(Clone,Debug,Hash,PartialEq,Eq)]
 pub struct LocalAddress {
-    interface: String,
-    internal_address: SocketAddr,
-    external_address: Option<SocketAddr>,
+    pub interface: String,
+    pub internal_address: SocketAddr,
+    pub external_address: Option<SocketAddr>,
 }
 
 impl LocalAddress {

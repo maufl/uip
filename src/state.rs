@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::{Arc,RwLock,RwLockReadGuard,RwLockWriteGuard};
-use futures::{Future,Poll,Async,future,Stream};
+use futures::{Future,Poll,Stream};
 use futures::sync::mpsc::{channel};
 use tokio_core::reactor::{Handle};
 use tokio_uds::{UnixListener};

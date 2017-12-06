@@ -3,7 +3,7 @@ extern crate bytes;
 
 use std::os::unix::net::UnixStream;
 use std::env::{args};
-use std::io::{Write,Read,BufRead,stdin};
+use std::io::{Write,BufRead,stdin};
 use byteorder::{BigEndian};
 use bytes::BytesMut;
 use bytes::buf::{BufMut};

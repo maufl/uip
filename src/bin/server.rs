@@ -17,8 +17,7 @@ use std::fs::File;
 use std::path::Path;
 use std::env;
 use futures::stream::Stream;
-use futures::{Future,IntoFuture};
-use std::io::{Error, ErrorKind};
+use futures::{Future};
 
 fn main() {
     env_logger::init().unwrap();
@@ -40,15 +39,11 @@ fn main() {
         let id = Id::generate().expect("Unable to generate an ID");
         State::from_id(id, core.handle())
     };
-    let stdin = std::io::stdin();
-    let file = tokio_file_unix::StdFile(stdin.lock());
-    let file = tokio_file_unix::File::new_nb(file).unwrap();
-    let file = file.into_reader(&core.handle()).unwrap();
     println!("Starting client for ID {}", state.read().id.hash);
     core.handle().spawn(state.clone());
     let handle = core.handle();
-    core.run(tokio_signal::ctrl_c(&handle).flatten_stream().into_future().map(|_| println!("Received CTRL-C") ).map_err(|_| println!("Panic") ) );
-    write_configuration(&config_file_path, &state.to_configuration());
+    let _ = core.run(tokio_signal::ctrl_c(&handle).flatten_stream().into_future().map(|_| println!("Received CTRL-C") ).map_err(|_| println!("Panic") ) );
+    let _ = write_configuration(&config_file_path, &state.to_configuration());
 }
 
 fn read_configuration(path: String) -> Result<Configuration, String> {
