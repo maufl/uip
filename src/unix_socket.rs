@@ -41,11 +41,10 @@ impl UnixSocket {
             })
             .map_err(|err| warn!("Unix stream error: {}", err));
         state.spawn(done);
-        let unix_socket = UnixSocket {
+        UnixSocket {
             state: state.clone(),
             sink: sender,
-        };
-        return unix_socket;
+        }
     }
 
     pub fn send_frame(

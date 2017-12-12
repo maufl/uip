@@ -25,7 +25,7 @@ impl Connection {
     }
 
     pub fn local_addr(&self) -> Result<SocketAddr> {
-        Ok(self.addr.clone())
+        Ok(self.addr)
     }
 }
 

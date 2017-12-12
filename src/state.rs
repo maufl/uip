@@ -103,7 +103,7 @@ impl State {
             id: state.id.clone(),
             pib: network.pib.clone(),
             relays: network.relays.clone(),
-            port: network.port.clone(),
+            port: network.port,
             ctl_socket: state.ctl_socket.clone(),
         }
     }

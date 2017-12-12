@@ -73,7 +73,7 @@ impl NetworkState {
             if self.read().sockets.contains_key(&address) {
                 continue;
             };
-            let mut addr: SocketAddr = address.internal_address.clone();
+            let mut addr: SocketAddr = address.internal_address;
             addr.set_port(self.read().port);
             debug!("Opening new socket on address {}", addr);
             let socket = SharedSocket::bind(&addr, &self.read().handle).expect(
@@ -89,7 +89,7 @@ impl NetworkState {
             .pib
             .get_peer(id)
             .and_then(|peer| peer.addresses.first())
-            .map(|address| address.clone())
+            .cloned()
     }
 
     pub fn add_peer_address(&mut self, id: String, addr: SocketAddr) {
@@ -202,10 +202,9 @@ impl NetworkState {
     fn connect(&self, remote_id: String) -> impl Future<Item = Transport, Error = io::Error> {
         let state = self.clone();
         self.lookup_peer_address(&remote_id)
-            .ok_or(io::Error::new(
-                io::ErrorKind::NotFound,
-                "peer address not found",
-            ))
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::NotFound, "peer address not found")
+            })
             .into_future()
             .and_then(move |addr| state.open_transport(remote_id, addr))
     }
@@ -236,10 +235,9 @@ impl NetworkState {
             .sockets
             .values()
             .next()
-            .ok_or(io::Error::new(
-                io::ErrorKind::NotConnected,
-                "Currently not connected",
-            ))
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::NotConnected, "Currently not connected")
+            })
             .and_then(|socket| socket.connect(addr))
             .into_future()
             .and_then(move |stream| {
@@ -285,7 +283,7 @@ impl NetworkState {
             .connections
             .get(&host_id)
             .and_then(|cs| cs.first())
-            .map(|c| c.clone())
+            .cloned()
             .ok_or(())
             .into_future()
             .or_else(move |_| state.connect(host_id))

@@ -108,7 +108,7 @@ impl Transport {
             })
             .map_err(|err| println!("Error while receiving frame: {}", err));
         state.spawn(done);
-        return transport;
+        transport
     }
 
     pub fn send_frame(
