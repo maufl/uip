@@ -26,7 +26,9 @@ fn main() {
 
     let mut socket =
         UnixStream::connect(&socket_address).expect("Unable to connect to unix socket");
-    socket.write(&connect).expect("Unable to write to socket");
+    socket.write_all(&connect).expect(
+        "Unable to write to socket",
+    );
     let stdin = stdin();
     for line in stdin.lock().lines() {
         println!("> ");
@@ -38,7 +40,7 @@ fn main() {
         data.put_u8(2);
         data.put_u16::<BigEndian>(line.len() as u16);
         data.put_slice(line.as_bytes());
-        socket.write(&data).expect("Unable to write to socket");
+        socket.write_all(&data).expect("Unable to write to socket");
         //let mut buf = [0u8;1500];
         //socket.read(&mut buf).expect("Unable to read from socket");
     }

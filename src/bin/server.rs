@@ -24,7 +24,7 @@ fn main() {
 
     let mut core = Core::new().unwrap();
     let config_file_path = if env::args().count() > 1 {
-        env::args().skip(1).next().expect("No config file given")
+        env::args().nth(1).expect("No config file given")
     } else {
         ".server.json".to_string()
     };

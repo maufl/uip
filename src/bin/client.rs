@@ -28,7 +28,7 @@ fn main() {
     let mut core = Core::new().unwrap();
 
     let config_file_path = if env::args().count() > 1 {
-        env::args().skip(1).next().expect("No config file given")
+        env::args().nth(1).expect("No config file given")
     } else {
         ".client.json".to_string()
     };
@@ -115,7 +115,7 @@ fn main() {
     let _ = core.run(done.select(ctrl_future));
 }
 
-fn read_configuration(path: &String) -> Result<Configuration, String> {
+fn read_configuration(path: &str) -> Result<Configuration, String> {
     let config_file = match File::open(path) {
         Ok(file) => file,
         Err(err) => {
