@@ -1,8 +1,8 @@
-use std::io::{Result,Error,ErrorKind};
-use byteorder::{BigEndian,ByteOrder};
+use std::io::{Result, Error, ErrorKind};
+use byteorder::{BigEndian, ByteOrder};
 use bytes::BytesMut;
-use bytes::buf::{BufMut};
-use tokio_io::codec::{Decoder,Encoder};
+use bytes::buf::BufMut;
+use tokio_io::codec::{Decoder, Encoder};
 
 pub enum Frame {
     Connect(String, u16),
@@ -24,10 +24,9 @@ impl Decoder for ControlProtocolCodec {
         match typ {
             1u8 => parse_connect(buf),
             2u8 => parse_data(buf),
-            _ => Err(Error::new(ErrorKind::Other, "Invalid packet"))
+            _ => Err(Error::new(ErrorKind::Other, "Invalid packet")),
         }
     }
-
 }
 
 impl Encoder for ControlProtocolCodec {
@@ -65,10 +64,10 @@ fn parse_connect(buf: &mut BytesMut) -> Result<Option<Frame>> {
     if buf.len() < len + 5 {
         return Ok(None);
     };
-    let host_id = String::from_utf8(buf.as_ref()[3..len+3].to_vec())
-        .map_err(|_| Error::new(ErrorKind::Other, "Invalid host identifier") )?;
-    let channel_id = BigEndian::read_u16(&buf.as_ref()[len+3..len+5]);
-    let _ = buf.split_to(len+5);
+    let host_id = String::from_utf8(buf.as_ref()[3..len + 3].to_vec())
+        .map_err(|_| Error::new(ErrorKind::Other, "Invalid host identifier"))?;
+    let channel_id = BigEndian::read_u16(&buf.as_ref()[len + 3..len + 5]);
+    let _ = buf.split_to(len + 5);
     Ok(Some(Frame::Connect(host_id, channel_id)))
 }
 

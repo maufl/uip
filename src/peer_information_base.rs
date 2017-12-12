@@ -1,8 +1,8 @@
-use std::net::{SocketAddr};
+use std::net::SocketAddr;
 use std::collections::HashMap;
 
 #[allow(dead_code)]
-#[derive(Serialize,Deserialize,Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Peer {
     pub id: String,
     pub addresses: Vec<SocketAddr>,
@@ -20,17 +20,15 @@ impl Peer {
     }
 }
 
-#[derive(Serialize,Deserialize,Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct PeerInformationBase {
-    peers: HashMap<String, Peer>
+    peers: HashMap<String, Peer>,
 }
 
 #[allow(dead_code)]
 impl PeerInformationBase {
     pub fn new() -> PeerInformationBase {
-        PeerInformationBase {
-            peers: HashMap::new()
-        }
+        PeerInformationBase { peers: HashMap::new() }
     }
 
     pub fn add_peer(&mut self, id: String, peer: Peer) {

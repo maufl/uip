@@ -27,4 +27,3 @@ mod network;
 pub use configuration::Configuration;
 pub use state::State;
 pub use id::Id;
-

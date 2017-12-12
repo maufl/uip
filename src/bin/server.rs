@@ -10,28 +10,28 @@ extern crate env_logger;
 extern crate uip;
 
 use uip::Configuration;
-use uip::{State,Id};
+use uip::{State, Id};
 
-use tokio_core::reactor::{Core};
+use tokio_core::reactor::Core;
 use std::fs::File;
 use std::path::Path;
 use std::env;
 use futures::stream::Stream;
-use futures::{Future};
+use futures::Future;
 
 fn main() {
     env_logger::init().unwrap();
-    
+
     let mut core = Core::new().unwrap();
     let config_file_path = if env::args().count() > 1 {
         env::args().skip(1).next().expect("No config file given")
     } else {
         ".server.json".to_string()
     };
-    let state =  if Path::new(&config_file_path).is_file() {
+    let state = if Path::new(&config_file_path).is_file() {
         let config = match read_configuration(config_file_path.to_string()) {
             Ok(c) => c,
-            Err(err) => return println!("{}", err)
+            Err(err) => return println!("{}", err),
         };
         State::from_configuration(config, core.handle())
     } else {
@@ -42,7 +42,13 @@ fn main() {
     println!("Starting client for ID {}", state.read().id.hash);
     core.handle().spawn(state.clone());
     let handle = core.handle();
-    let _ = core.run(tokio_signal::ctrl_c(&handle).flatten_stream().into_future().map(|_| println!("Received CTRL-C") ).map_err(|_| println!("Panic") ) );
+    let _ = core.run(
+        tokio_signal::ctrl_c(&handle)
+            .flatten_stream()
+            .into_future()
+            .map(|_| println!("Received CTRL-C"))
+            .map_err(|_| println!("Panic")),
+    );
     let _ = write_configuration(&config_file_path, &state.to_configuration());
 }
 
@@ -53,13 +59,17 @@ fn read_configuration(path: String) -> Result<Configuration, String> {
             return Err(format!("Error while opening configuration file: {}", err));
         }
     };
-    serde_json::from_reader(config_file)
-        .map_err(|err| format!("Error while reading configuration file: {}", err))
+    serde_json::from_reader(config_file).map_err(|err| {
+        format!("Error while reading configuration file: {}", err)
+    })
 }
 fn write_configuration(path: &str, conf: &Configuration) -> Result<(), String> {
-    let config_file = File::create(path)
-        .map_err(|err| format!("Error while opening configuration file: {}", err))?;
+    let config_file = File::create(path).map_err(|err| {
+        format!("Error while opening configuration file: {}", err)
+    })?;
     serde_json::to_writer(config_file, conf)
         .map(|_| ())
-        .map_err(|err| format!("Error while reading configuration file: {}", err))
+        .map_err(|err| {
+            format!("Error while reading configuration file: {}", err)
+        })
 }

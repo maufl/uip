@@ -1,17 +1,17 @@
-use tokio_io::codec::{Encoder,Decoder};
-use tokio_io::{AsyncRead,AsyncWrite};
-use std::io::{Error,ErrorKind};
-use futures::{Stream,Sink,Future};
-use futures::sync::mpsc::{Sender,SendError,channel};
+use tokio_io::codec::{Encoder, Decoder};
+use tokio_io::{AsyncRead, AsyncWrite};
+use std::io::{Error, ErrorKind};
+use futures::{Stream, Sink, Future};
+use futures::sync::mpsc::{Sender, SendError, channel};
 use bytes::{BytesMut, BufMut, BigEndian as BytesBigEndian};
-use byteorder::{BigEndian,ByteOrder};
+use byteorder::{BigEndian, ByteOrder};
 use tokio_openssl::SslStream;
 use network::NetworkState;
 
 pub enum Frame {
     Ping,
     Pong,
-    Data(u16, BytesMut)
+    Data(u16, BytesMut),
 }
 
 pub struct Codec();
@@ -42,13 +42,13 @@ impl Decoder for Codec {
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Frame>, Error> {
         let typ = match src.first() {
             Some(byte) => *byte,
-            None => return Ok(None)
+            None => return Ok(None),
         };
         match typ {
             1 => return Ok(Some(Frame::Ping)),
             2 => return Ok(Some(Frame::Pong)),
-            3 => {},
-            _ => return Err(Error::new(ErrorKind::InvalidData, "invalid message type"))
+            3 => {}
+            _ => return Err(Error::new(ErrorKind::InvalidData, "invalid message type")),
         };
         if src.len() < 5 {
             return Ok(None);
@@ -70,11 +70,20 @@ pub struct Transport {
 }
 
 impl Transport {
-    pub fn from_tls_stream<S>(state: NetworkState, stream: SslStream<S>, remote_id: String) -> Transport
-        where S: AsyncRead + AsyncWrite + 'static {
+    pub fn from_tls_stream<S>(
+        state: NetworkState,
+        stream: SslStream<S>,
+        remote_id: String,
+    ) -> Transport
+    where
+        S: AsyncRead + AsyncWrite + 'static,
+    {
         let (sink, stream) = stream.framed(Codec()).split();
         let (sender, receiver) = channel::<Frame>(10);
-        let done = receiver.forward(sink.sink_map_err(|err| println!("Unexpected sink error: {}", err) ))
+        let done = receiver
+            .forward(sink.sink_map_err(
+                |err| println!("Unexpected sink error: {}", err),
+            ))
             .map(|_| ());
         state.spawn(done);
         let transport = Transport {
@@ -82,26 +91,32 @@ impl Transport {
             sink: sender,
         };
         let transport2 = transport.clone();
-        let done = stream.for_each(move |frame| {
-            match frame {
-                Frame::Ping => println!("Ping"),
-                Frame::Pong => println!("Pong"),
-                Frame::Data(channel_id, data) => {
-                    transport2.state.deliver_frame(remote_id.clone(), channel_id, data)
-                }
-            };
-            Ok(())
-        }).map_err(|err| {
-            println!("Error while receiving frame: {}", err)
-        });
+        let done = stream
+            .for_each(move |frame| {
+                match frame {
+                    Frame::Ping => println!("Ping"),
+                    Frame::Pong => println!("Pong"),
+                    Frame::Data(channel_id, data) => {
+                        transport2.state.deliver_frame(
+                            remote_id.clone(),
+                            channel_id,
+                            data,
+                        )
+                    }
+                };
+                Ok(())
+            })
+            .map_err(|err| println!("Error while receiving frame: {}", err));
         state.spawn(done);
         return transport;
     }
 
-    pub fn send_frame(&self, channel_id: u16, data: BytesMut) -> impl Future<Item=Sender<Frame>,Error=SendError<Frame>>{
+    pub fn send_frame(
+        &self,
+        channel_id: u16,
+        data: BytesMut,
+    ) -> impl Future<Item = Sender<Frame>, Error = SendError<Frame>> {
         println!("Sending frame to {}", channel_id);
-        self.sink.clone()
-            .send(Frame::Data(channel_id, data))
+        self.sink.clone().send(Frame::Data(channel_id, data))
     }
-
 }
