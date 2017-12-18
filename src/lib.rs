@@ -15,6 +15,9 @@ extern crate openssl;
 extern crate tokio_openssl;
 #[macro_use]
 extern crate log;
+extern crate nix;
+extern crate libc;
+extern crate mio;
 
 mod peer_information_base;
 mod unix_socket;

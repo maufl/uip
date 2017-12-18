@@ -19,6 +19,7 @@ use peer_information_base::{Peer, PeerInformationBase};
 use id::Id;
 use network::{Transport, LocalAddress, SharedSocket};
 use network::discovery::discover_addresses;
+use network::change::Listener;
 
 pub struct InnerState {
     pub id: Id,
@@ -86,6 +87,24 @@ impl NetworkState {
                 Ok(())
             })
             .map_err(|err| warn!("Error while setting up sockets: {}", err));
+        self.spawn(task);
+    }
+
+    fn observe_network_changes(&self) {
+        let state = self.clone();
+        let listener = match Listener::new(&self.read().handle) {
+            Ok(l) => l,
+            Err(err) => return warn!("Unable to listen for network changes: {}", err),
+        };
+        let task = listener
+            .for_each(move |_| {
+                info!("Network changed");
+                state.open_sockets();
+                Ok(())
+            })
+            .map_err(|err| {
+                warn!("Error while listening for network changes: {}", err)
+            });
         self.spawn(task);
     }
 
@@ -162,7 +181,10 @@ impl NetworkState {
                         Ok(())
                     })
             })
-            .map_err(|_| println!("DTLS listener died"));
+            .map(move |_| info!("UDP socket on {} was closed", local_addr))
+            .map_err(move |_err| {
+                info!("DTLS listener on {} died unexpectedly", local_addr)
+            });
         self.spawn(task);
     }
 
@@ -297,6 +319,7 @@ impl Future for NetworkState {
     fn poll(&mut self) -> Poll<(), ()> {
         self.open_sockets();
         self.connect_to_relays();
+        self.observe_network_changes();
         Ok(Async::NotReady)
     }
 }
