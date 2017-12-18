@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::time::Duration;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use futures::{Future, IntoFuture, Poll, Async, future, Stream, Sink};
@@ -97,6 +98,7 @@ impl NetworkState {
             Err(err) => return warn!("Unable to listen for network changes: {}", err),
         };
         let task = listener
+            .debounce(Duration::from_millis(2000))
             .for_each(move |_| {
                 info!("Network changed");
                 state.open_sockets();
