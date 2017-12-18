@@ -20,7 +20,7 @@ use std::error::Error;
 use peer_information_base::{Peer, PeerInformationBase};
 use id::Id;
 use network::{Transport, LocalAddress, SharedSocket};
-use network::discovery::{discover_addresses, request_external_address};
+use network::discovery::{discover_addresses, request_external_address, AddressDiscoveryError};
 use network::change::Listener;
 
 pub struct InnerState {
@@ -75,8 +75,10 @@ impl NetworkState {
         let state = self.clone();
         let state2 = self.clone();
         let state3 = self.clone();
+        let port = self.read().port;
         let task = discover_addresses()
             .map_err(|err| warn!("Unable to enumerate local addresses: {}", err))
+            .map(move |mut addr| { addr.internal_address.set_port(port); addr })
             .collect()
             .and_then(move |addresses| {
                 let stale: Vec<LocalAddress> = state
@@ -99,7 +101,10 @@ impl NetworkState {
                     .and_then(move |address| {
                         request_external_address(address.clone(), &state2.read().handle)
                             .or_else(|err| {
-                                warn!("Error while requesting external address: {}", err);
+                                match err {
+                                    AddressDiscoveryError::UnsupportedAddress(_) => {}
+                                   _ => warn!("Error while requesting external address: {}", err)
+                                };
                                 Ok(address)
                             })
                     })
