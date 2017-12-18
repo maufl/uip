@@ -69,19 +69,24 @@ impl NetworkState {
     }
 
     fn open_sockets(&self) -> () {
-        for address in discover_addresses().expect("Unable to list interfaces") {
-            if self.read().sockets.contains_key(&address) {
-                continue;
-            };
-            let mut addr: SocketAddr = address.internal_address;
-            addr.set_port(self.read().port);
-            debug!("Opening new socket on address {}", addr);
-            let socket = SharedSocket::bind(&addr, &self.read().handle).expect(
-                "Unable to bind to local address",
-            );
-            self.write().sockets.insert(address, socket.clone());
-            self.listen(socket);
-        }
+        let state = self.clone();
+        let task = discover_addresses(self.read().handle.clone())
+            .for_each(move |address| {
+                if state.read().sockets.contains_key(&address) {
+                    return Ok(());
+                };
+                let mut addr: SocketAddr = address.internal_address;
+                addr.set_port(state.read().port);
+                debug!("Opening new socket on address {}", addr);
+                let socket = SharedSocket::bind(&addr, &state.read().handle).expect(
+                    "Unable to bind to local address",
+                );
+                state.write().sockets.insert(address, socket.clone());
+                state.listen(socket);
+                Ok(())
+            })
+            .map_err(|err| warn!("Error while setting up sockets: {}", err));
+        self.spawn(task);
     }
 
     fn lookup_peer_address(&self, id: &str) -> Option<SocketAddr> {
@@ -131,12 +136,9 @@ impl NetworkState {
                 id.cert.as_ref(),
                 empty_chain.as_ref(),
             ).expect("Unable to build new SSL acceptor");
-            builder.builder_mut().set_verify_callback(
-                SSL_VERIFY_PEER,
-                |_valid, context| {
-                    context.current_cert().is_some()
-                },
-            );
+            builder.set_verify_callback(SSL_VERIFY_PEER, |_valid, context| {
+                context.current_cert().is_some()
+            });
             builder.build()
         };
         let local_addr = listener.local_addr().expect("Not bound to a local address");
@@ -218,15 +220,13 @@ impl NetworkState {
             let mut builder = SslConnectorBuilder::new(SslMethod::dtls()).expect(
                 "Unable to build new SSL connector",
             );
-            builder.builder_mut().set_verify(SslVerifyMode::empty());
-            builder
-                .builder_mut()
-                .set_certificate(&self.read().id.cert)
-                .expect("Unable to get reference to client certificate");
-            builder
-                .builder_mut()
-                .set_private_key(&self.read().id.key)
-                .expect("Unable to get a reference to the client key");
+            builder.set_verify(SslVerifyMode::empty());
+            builder.set_certificate(&self.read().id.cert).expect(
+                "Unable to get reference to client certificate",
+            );
+            builder.set_private_key(&self.read().id.key).expect(
+                "Unable to get a reference to the client key",
+            );
             builder.build()
         };
         let state = self.clone();

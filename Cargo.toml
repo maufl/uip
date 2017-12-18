@@ -5,10 +5,11 @@ authors = ["Felix Konstantin Maurer <maufl@maufl.de>"]
 
 [dependencies]
 #interfaces = "0.0.2"
-interfaces = { git = "https://github.com/maufl/interfaces-rs.git", branch = "fix-flowinfo-and-scope_id" }
+interfaces = { git = "https://github.com/maufl/interfaces-rs.git", branch = "derive-clone-copy" }
 bytes = "0.4.4"
 byteorder = "1.0.0"
-igd = "0.6.0"
+#igd = "0.6.0"
+igd = { git = "https://github.com/maufl/rust-igd.git", branch = "into-the-future" }
 async-readline = { git = "https://github.com/dpc/async-readline" } 
 futures = "0.1"
 tokio-io = "0.1"
