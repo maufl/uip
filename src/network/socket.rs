@@ -75,10 +75,10 @@ pub struct SharedSocket(Arc<RwLock<Socket>>);
 
 impl SharedSocket {
     pub fn bind(addr: &SocketAddr, handle: &Handle) -> Result<SharedSocket> {
-        UdpSocket::bind(addr, handle).map(|s| SharedSocket::from_socket(s, handle.clone()))
+        UdpSocket::bind(addr, handle).and_then(|s| SharedSocket::from_socket(s, handle.clone()))
     }
 
-    pub fn from_socket(sock: UdpSocket, handle: Handle) -> SharedSocket {
+    pub fn from_socket(sock: UdpSocket, handle: Handle) -> Result<SharedSocket> {
         let (sender, receiver) = channel::<Connection>(10);
         let socket = SharedSocket(Arc::new(RwLock::new(Socket {
             inner: sock,
@@ -88,6 +88,7 @@ impl SharedSocket {
         })));
         let socket_clone = socket.clone();
         let handle_clone = handle.clone();
+        let local_address = socket.local_addr()?;
         let task = poll_fn(move || {
             let mut datagram = [0u8; 1500];
             let (read, addr) = match socket_clone.recv_from(&mut datagram) {
@@ -115,9 +116,9 @@ impl SharedSocket {
             }
             Ok(Async::Ready(Some(())))
         }).collect()
-            .map(|_| ());
+            .map(move |_| info!("UDP socket {} was closed", local_address));
         handle.spawn(task);
-        socket
+        Ok(socket)
     }
 
     fn read(&self) -> RwLockReadGuard<Socket> {

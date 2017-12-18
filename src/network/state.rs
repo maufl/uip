@@ -3,6 +3,7 @@ use std::time::Duration;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use futures::{Future, IntoFuture, Poll, Async, future, Stream, Sink};
+use futures::stream::iter_ok;
 use futures::sync::mpsc::Sender;
 use tokio_core::reactor::Handle;
 use tokio_io::{AsyncRead, AsyncWrite};
@@ -19,7 +20,7 @@ use std::error::Error;
 use peer_information_base::{Peer, PeerInformationBase};
 use id::Id;
 use network::{Transport, LocalAddress, SharedSocket};
-use network::discovery::discover_addresses;
+use network::discovery::{discover_addresses, request_external_address};
 use network::change::Listener;
 
 pub struct InnerState {
@@ -70,25 +71,56 @@ impl NetworkState {
         self.read().handle.spawn(f)
     }
 
-    fn open_sockets(&self) -> () {
+    fn open_sockets(&self) {
         let state = self.clone();
-        let task = discover_addresses(self.read().handle.clone())
-            .for_each(move |address| {
-                if state.read().sockets.contains_key(&address) {
-                    return Ok(());
-                };
-                let mut addr: SocketAddr = address.internal_address;
-                addr.set_port(state.read().port);
-                debug!("Opening new socket on address {}", addr);
-                let socket = SharedSocket::bind(&addr, &state.read().handle).expect(
-                    "Unable to bind to local address",
-                );
-                state.write().sockets.insert(address, socket.clone());
-                state.listen(socket);
-                Ok(())
-            })
-            .map_err(|err| warn!("Error while setting up sockets: {}", err));
+        let state2 = self.clone();
+        let state3 = self.clone();
+        let task = discover_addresses()
+            .map_err(|err| warn!("Unable to enumerate local addresses: {}", err))
+            .collect()
+            .and_then(move |addresses| {
+                let stale: Vec<LocalAddress> = state
+                    .read()
+                    .sockets
+                    .keys()
+                    .filter(|address| !addresses.contains(address))
+                    .cloned()
+                    .collect();
+                for address in stale {
+                    info!("Closing stale socket {}", address.internal_address);
+                    if let Some(socket) = state.write().sockets.remove(&address) {
+                        info!("Closed socket {}", address.internal_address);
+                    } else {
+                        info!("No socket found for {}", address.internal_address);
+                    };
+                }
+                iter_ok(addresses)
+                    .filter(move |address| !state.read().sockets.contains_key(&address))
+                    .and_then(move |address| {
+                        request_external_address(address.clone(), &state2.read().handle)
+                            .or_else(|err| {
+                                warn!("Error while requesting external address: {}", err);
+                                Ok(address)
+                            })
+                    })
+                    .for_each(move |address| {
+                        state3.open_socket(address).map_err(|err| {
+                            warn!("Error while opening socket: {}", err)
+                        });
+                        Ok(())
+                    })
+            });
         self.spawn(task);
+    }
+
+    fn open_socket(&self, address: LocalAddress) -> io::Result<()> {
+        let mut addr: SocketAddr = address.internal_address;
+        addr.set_port(self.read().port);
+        debug!("Opening new socket on address {}", addr);
+        let socket = SharedSocket::bind(&addr, &self.read().handle)?;
+        self.write().sockets.insert(address, socket.clone());
+        self.listen(socket);
+        Ok(())
     }
 
     fn observe_network_changes(&self) {

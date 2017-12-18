@@ -3,7 +3,7 @@ use std::error::Error;
 use std::fmt::{self, Display};
 
 use futures::{Stream, IntoFuture, Future};
-use futures::future::ok;
+use futures::future::{ok, err};
 use futures::stream::iter_ok;
 use tokio_core::reactor::Handle;
 
@@ -18,6 +18,7 @@ use network::LocalAddress;
 pub enum AddressDiscoveryError {
     IgdError(String),
     InterfacesError(String),
+    UnsupportedAddress(String),
 }
 
 impl Display for AddressDiscoveryError {
@@ -30,7 +31,8 @@ impl Error for AddressDiscoveryError {
     fn description(&self) -> &str {
         match *self {
             AddressDiscoveryError::IgdError(ref string) |
-            AddressDiscoveryError::InterfacesError(ref string) => string,
+            AddressDiscoveryError::InterfacesError(ref string) |
+            AddressDiscoveryError::UnsupportedAddress(ref string) => string,
         }
     }
 }
@@ -50,9 +52,9 @@ impl From<AddAnyPortError> for AddressDiscoveryError {
     }
 }
 
-pub fn discover_addresses(
-    handle: Handle,
-) -> impl Stream<Item = LocalAddress, Error = AddressDiscoveryError> + 'static {
+pub fn discover_addresses()
+    -> impl Stream<Item = LocalAddress, Error = AddressDiscoveryError> + 'static
+{
     Interface::get_all()
         .map_err(|err| {
             AddressDiscoveryError::InterfacesError(
@@ -83,18 +85,24 @@ pub fn discover_addresses(
                 .flatten()
         })
         .flatten()
-        .and_then(move |address| match address.internal_address {
-            SocketAddr::V4(addr) => request_external_address(address, addr, &handle),
-            _ => Box::new(ok(address)),
-        })
 }
 
-fn request_external_address(
+pub fn request_external_address(
     address: LocalAddress,
-    internal_address: SocketAddrV4,
     handle: &Handle,
 ) -> Box<Future<Item = LocalAddress, Error = AddressDiscoveryError> + 'static> {
     let default_address = address.clone();
+    let internal_address = match address.internal_address {
+        SocketAddr::V4(addr) => addr,
+        _ => {
+            return Box::new(err(AddressDiscoveryError::UnsupportedAddress(
+                format!(
+                    "Address {} is not supported for external address discovery",
+                    address.internal_address,
+                ).to_owned(),
+            )))
+        }
+    };
     let future = search_gateway(handle)
         .from_err::<AddressDiscoveryError>()
         .and_then(move |gateway| {
