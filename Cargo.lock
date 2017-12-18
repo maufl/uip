@@ -206,7 +206,7 @@ dependencies = [
 [[package]]
 name = "igd"
 version = "0.6.0"
-source = "git+https://github.com/maufl/rust-igd.git?branch=into-the-future#e5686d7a857f9fb350f200ee2befb1e1de49acf9"
+source = "git+https://github.com/maufl/rust-igd.git?branch=into-the-future#450ccbdedf4e1b7efd8ea9b0214fc7b6b1906c6b"
 dependencies = [
  "futures 0.1.17 (registry+https://github.com/rust-lang/crates.io-index)",
  "hyper 0.11.9 (registry+https://github.com/rust-lang/crates.io-index)",
