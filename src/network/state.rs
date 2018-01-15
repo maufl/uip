@@ -271,7 +271,6 @@ impl NetworkState {
     }
 
     fn add_connection(&self, id: String, conn: Transport) {
-        conn.send_peer_info(self.my_peer_information());
         self.write()
             .connections
             .entry(id)
@@ -327,6 +326,7 @@ impl NetworkState {
             })
             .and_then(move |stream| {
                 let conn = Transport::from_tls_stream(state.clone(), stream, id2.clone());
+                conn.send_peer_info(state.my_peer_information());
                 state.add_connection(id2, conn.clone());
                 Ok(conn)
             })
