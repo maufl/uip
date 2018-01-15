@@ -38,4 +38,18 @@ impl PeerInformationBase {
     pub fn get_peer(&self, id: &str) -> Option<&Peer> {
         self.peers.get(id)
     }
+
+    pub fn lookup_peer_address(&self, id: &str) -> Option<SocketAddr> {
+        self.get_peer(id)
+            .and_then(|peer| peer.addresses.first())
+            .cloned()
+    }
+
+    pub fn add_peer_address(&mut self, id: String, addr: SocketAddr) {
+        self.peers
+            .entry(id.clone())
+            .or_insert(Peer::new(id, vec![], vec![]))
+            .addresses
+            .push(addr)
+    }
 }

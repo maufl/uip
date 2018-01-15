@@ -61,7 +61,7 @@ impl NetworkState {
         self.0.read().expect("Unable to acquire read lock on state")
     }
 
-    fn write(&self) -> RwLockWriteGuard<InnerState> {
+    pub fn write(&self) -> RwLockWriteGuard<InnerState> {
         self.0.write().expect(
             "Unable to acquire write lock on state",
         )
@@ -178,28 +178,13 @@ impl NetworkState {
         self.spawn(task);
     }
 
-    fn lookup_peer_address(&self, id: &str) -> Option<SocketAddr> {
-        self.read()
-            .pib
-            .get_peer(id)
-            .and_then(|peer| peer.addresses.first())
-            .cloned()
-    }
-
-    pub fn add_peer_address(&mut self, id: String, addr: SocketAddr) {
-        self.write().pib.add_peer(
-            id.clone(),
-            Peer::new(id, vec![addr], vec![]),
-        )
-    }
-
     pub fn add_relay(&mut self, id: String) {
         self.write().relays.push(id);
     }
 
     pub fn connect_to_relays(&self) {
         for relay in &self.read().relays {
-            let addr = match self.lookup_peer_address(relay) {
+            let addr = match self.read().pib.lookup_peer_address(relay) {
                 Some(info) => info,
                 None => continue,
             };
@@ -296,7 +281,9 @@ impl NetworkState {
 
     fn connect(&self, remote_id: String) -> impl Future<Item = Transport, Error = io::Error> {
         let state = self.clone();
-        self.lookup_peer_address(&remote_id)
+        self.read()
+            .pib
+            .lookup_peer_address(&remote_id)
             .ok_or_else(|| {
                 io::Error::new(io::ErrorKind::NotFound, "peer address not found")
             })

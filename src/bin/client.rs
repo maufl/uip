@@ -74,7 +74,11 @@ fn main() {
                     let id = args.nth(2).expect("Peer id required").to_string();
                     let addr = args.next().expect("Peer address required");
                     let sock_addr: SocketAddr = addr.parse().expect("Invalid socket address");
-                    state2.write().network.add_peer_address(id, sock_addr);
+                    let inner_state = state2.write();
+                    inner_state.network.write().pib.add_peer_address(
+                        id,
+                        sock_addr,
+                    );
                 }
             } else if command.starts_with("relay add") {
                 let mut args = command.split_whitespace();
