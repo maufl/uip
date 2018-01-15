@@ -4,7 +4,7 @@ mod transport;
 mod socket;
 mod discovery;
 mod change;
-//pub mod protocol;
+pub mod protocol;
 
 use self::local_address::LocalAddress;
 pub use self::state::NetworkState;

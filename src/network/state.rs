@@ -138,7 +138,7 @@ impl NetworkState {
         );
         for (_id, connections) in self.read().connections.iter() {
             for connection in connections.iter() {
-                //connection.send_peer_info(peer_information);
+                connection.send_peer_info(peer_information.clone());
             }
         }
 

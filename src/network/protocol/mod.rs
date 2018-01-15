@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use rmp_serde::{Deserializer, Serializer};
 use rmp_serde::encode::Error as EncodeError;
 use rmp_serde::decode::Error as DecodeError;
+use bytes::{BytesMut, Bytes, BufMut};
 
 use peer_information_base::Peer;
 
@@ -14,12 +15,14 @@ pub enum Message {
 }
 
 impl Message {
-    pub fn serialize_to_msgpck<W: Write>(&self, writer: &mut W) -> Result<(), EncodeError> {
-        self.serialize(&mut Serializer::new(writer))
+    pub fn serialize_to_msgpck(&self, buffer: BytesMut) -> Result<BytesMut, EncodeError> {
+        let mut writer = buffer.writer();
+        self.serialize(&mut Serializer::new(&mut writer))?;
+        Ok(writer.into_inner())
     }
 
-    pub fn deserialize_from_msgpck<R: Read>(reader: &R) -> Result<Message, DecodeError> {
-        Deserialize::deserialize(&mut Deserializer::new(reader))
+    pub fn deserialize_from_msgpck(buffer: &Bytes) -> Result<Message, DecodeError> {
+        Deserialize::deserialize(&mut Deserializer::new(buffer.as_ref()))
     }
 }
 
