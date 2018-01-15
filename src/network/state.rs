@@ -115,33 +115,38 @@ impl NetworkState {
                     .for_each(move |address| {
                         state3.open_socket(address).map_err(|err| {
                             warn!("Error while opening socket: {}", err)
-                        });
-                        Ok(())
+                        })
                     })
             })
             .map(move |_| state4.publish_addresses());
         self.spawn(task);
     }
 
-    fn publish_addresses(&self) {
-        let addresses = self.read()
+    fn external_addresses(&self) -> Vec<SocketAddr> {
+        self.read()
             .sockets
             .iter()
             .filter_map(|(local_address, _socket)| {
                 local_address.external_address.clone()
             })
-            .collect();
-        let peer_information = Peer::new(
+            .collect()
+    }
+
+    fn my_peer_information(&self) -> Peer {
+        Peer::new(
             self.read().id.hash.clone(),
-            addresses,
+            self.external_addresses(),
             self.read().relays.clone(),
-        );
+        )
+    }
+
+    fn publish_addresses(&self) {
+        let peer_information = self.my_peer_information();
         for (_id, connections) in self.read().connections.iter() {
             for connection in connections.iter() {
                 connection.send_peer_info(peer_information.clone());
             }
         }
-
     }
 
     fn open_socket(&self, address: LocalAddress) -> io::Result<()> {
@@ -281,6 +286,7 @@ impl NetworkState {
     }
 
     fn add_connection(&self, id: String, conn: Transport) {
+        conn.send_peer_info(self.my_peer_information());
         self.write()
             .connections
             .entry(id)
