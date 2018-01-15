@@ -134,7 +134,7 @@ fn write_configuration(path: &str, conf: &Configuration) -> Result<(), String> {
     let config_file = File::create(path).map_err(|err| {
         format!("Error while opening configuration file: {}", err)
     })?;
-    serde_json::to_writer(config_file, conf)
+    serde_json::to_writer_pretty(config_file, conf)
         .map(|_| ())
         .map_err(|err| {
             format!("Error while reading configuration file: {}", err)
