@@ -6,20 +6,21 @@ authors = ["Felix Konstantin Maurer <maufl@maufl.de>"]
 [dependencies]
 #interfaces = "0.0.2"
 interfaces = { git = "https://github.com/maufl/interfaces-rs.git", branch = "derive-clone-copy" }
-bytes = "0.4.4"
+bytes = "0.4"
 byteorder = "1.0.0"
 #igd = "0.6.0"
 igd = { git = "https://github.com/maufl/rust-igd.git", branch = "into-the-future" }
 async-readline = { git = "https://github.com/dpc/async-readline" } 
 futures = "0.1"
 tokio-io = "0.1"
-tokio-core = "0.1"
+tokio-core = "= 0.1.11"
 tokio-openssl = "0.1"
-tokio-uds = "0.1.5"
+tokio-uds = "0.1"
 tokio-file-unix = "0.4"
 tokio-signal = "0.1"
 serde = "1.0"
 serde_json = "1.0"
+rmp-serde = "0.13"
 serde_derive = "1.0"
 openssl = "0.9"
 log = "0.3"

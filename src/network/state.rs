@@ -75,10 +75,14 @@ impl NetworkState {
         let state = self.clone();
         let state2 = self.clone();
         let state3 = self.clone();
+        let state4 = self.clone();
         let port = self.read().port;
         let task = discover_addresses()
             .map_err(|err| warn!("Unable to enumerate local addresses: {}", err))
-            .map(move |mut addr| { addr.internal_address.set_port(port); addr })
+            .map(move |mut addr| {
+                addr.internal_address.set_port(port);
+                addr
+            })
             .collect()
             .and_then(move |addresses| {
                 let stale: Vec<LocalAddress> = state
@@ -103,7 +107,7 @@ impl NetworkState {
                             .or_else(|err| {
                                 match err {
                                     AddressDiscoveryError::UnsupportedAddress(_) => {}
-                                   _ => warn!("Error while requesting external address: {}", err)
+                                    _ => warn!("Error while requesting external address: {}", err),
                                 };
                                 Ok(address)
                             })
