@@ -118,8 +118,30 @@ impl NetworkState {
                         });
                         Ok(())
                     })
-            });
+            })
+            .map(move |_| state4.publish_addresses());
         self.spawn(task);
+    }
+
+    fn publish_addresses(&self) {
+        let addresses = self.read()
+            .sockets
+            .iter()
+            .filter_map(|(local_address, _socket)| {
+                local_address.external_address.clone()
+            })
+            .collect();
+        let peer_information = Peer::new(
+            self.read().id.hash.clone(),
+            addresses,
+            self.read().relays.clone(),
+        );
+        for (_id, connections) in self.read().connections.iter() {
+            for connection in connections.iter() {
+                //connection.send_peer_info(peer_information);
+            }
+        }
+
     }
 
     fn open_socket(&self, address: LocalAddress) -> io::Result<()> {

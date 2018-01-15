@@ -8,7 +8,7 @@ use bytes::{BytesMut, BufMut};
 
 use super::codec::{Codec, Frame};
 use peer_information_base::Peer;
-use network::protocol::{Message, PeerInfo};
+//use network::protocol::{Message, PeerInfo};
 
 #[derive(Clone)]
 pub struct Transport {
@@ -67,20 +67,20 @@ impl Transport {
         self.sink.clone().send(Frame::Data(channel_id, data))
     }
 
-    pub fn send_peer_info(&self, peer: Peer) {
-        let peer_info = Message::PeerInfo(PeerInfo { peer: peer });
-        let mut buf = BytesMut::with_capacity(1500).writer();
-        if let Err(err) = peer_info.serialize_to_msgpck(&mut buf) {
-            return warn!(
-                "Failed to send peer information because serialization failed: {}",
-                err
-            );
-        };
-        let task = self.send_frame(0, buf.into_inner()).map(|_| {}).map_err(
-            |err| {
-                warn!("Unable to send peer information: {}", err)
-            },
-        );
-        self.state.spawn(task);
-    }
+    //    pub fn send_peer_info(&self, peer: Peer) {
+    //        let peer_info = Message::PeerInfo(PeerInfo { peer: peer });
+    //        let mut buf = BytesMut::with_capacity(1500).writer();
+    //        if let Err(err) = peer_info.serialize_to_msgpck(&mut buf) {
+    //            return warn!(
+    //                "Failed to send peer information because serialization failed: {}",
+    //                err
+    //            );
+    //        };
+    //        let task = self.send_frame(0, buf.into_inner()).map(|_| {}).map_err(
+    //            |err| {
+    //                warn!("Unable to send peer information: {}", err)
+    //            },
+    //        );
+    //        self.state.spawn(task);
+    //    }
 }

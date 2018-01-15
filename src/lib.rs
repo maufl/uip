@@ -9,6 +9,7 @@ extern crate tokio_io;
 extern crate tokio_uds;
 extern crate tokio_core;
 extern crate serde;
+extern crate rmp_serde;
 #[macro_use]
 extern crate serde_derive;
 extern crate openssl;
