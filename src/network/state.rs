@@ -1,7 +1,8 @@
 use std::net::{SocketAddr, IpAddr};
 use std::time::Duration;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::rc::Rc;
+use std::cell::{RefCell, Ref, RefMut};
 use futures::{Future, IntoFuture, Poll, Async, future, Stream, Sink};
 use futures::stream::iter_ok;
 use futures::sync::mpsc::Sender;
@@ -36,7 +37,7 @@ pub struct InnerState {
 }
 
 #[derive(Clone)]
-pub struct NetworkState(Arc<RwLock<InnerState>>);
+pub struct NetworkState(Rc<RefCell<InnerState>>);
 
 impl NetworkState {
     pub fn new(
@@ -47,7 +48,7 @@ impl NetworkState {
         handle: Handle,
         upstream: Sender<(String, u16, BytesMut)>,
     ) -> NetworkState {
-        NetworkState(Arc::new(RwLock::new(InnerState {
+        NetworkState(Rc::new(RefCell::new(InnerState {
             id: id,
             pib: pib,
             connections: HashMap::new(),
@@ -58,14 +59,12 @@ impl NetworkState {
             sockets: HashMap::new(),
         })))
     }
-    pub fn read(&self) -> RwLockReadGuard<InnerState> {
-        self.0.read().expect("Unable to acquire read lock on state")
+    pub fn read(&self) -> Ref<InnerState> {
+        self.0.borrow()
     }
 
-    pub fn write(&self) -> RwLockWriteGuard<InnerState> {
-        self.0.write().expect(
-            "Unable to acquire write lock on state",
-        )
+    pub fn write(&self) -> RefMut<InnerState> {
+        self.0.borrow_mut()
     }
 
     pub fn spawn<F: Future<Item = (), Error = ()> + 'static>(&self, f: F) {

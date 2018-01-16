@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::rc::Rc;
+use std::cell::{RefCell, Ref, RefMut};
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use futures::{Future, Poll, Stream};
 use futures::sync::mpsc::channel;
@@ -40,12 +42,12 @@ impl Drop for InnerState {
 
 
 #[derive(Clone)]
-pub struct State(pub Arc<RwLock<InnerState>>);
+pub struct State(pub Rc<RefCell<InnerState>>);
 
 impl State {
     pub fn from_configuration(config: Configuration, handle: Handle) -> State {
         let (sink, source) = channel::<(String, u16, BytesMut)>(5);
-        let state = State(Arc::new(RwLock::new(InnerState {
+        let state = State(Rc::new(RefCell::new(InnerState {
             id: config.id.clone(),
             network: NetworkState::new(
                 config.id,
@@ -72,7 +74,7 @@ impl State {
     pub fn from_id(id: Id, handle: Handle) -> State {
         let (sink, source) = channel::<(String, u16, BytesMut)>(5);
         let hash = id.hash.clone();
-        let state = State(Arc::new(RwLock::new(InnerState {
+        let state = State(Rc::new(RefCell::new(InnerState {
             id: id.clone(),
             network: NetworkState::new(
                 id,
@@ -108,14 +110,12 @@ impl State {
         }
     }
 
-    pub fn read(&self) -> RwLockReadGuard<InnerState> {
-        self.0.read().expect("Unable to acquire read lock on state")
+    pub fn read(&self) -> Ref<InnerState> {
+        self.0.borrow()
     }
 
-    pub fn write(&self) -> RwLockWriteGuard<InnerState> {
-        self.0.write().expect(
-            "Unable to acquire write lock on state",
-        )
+    pub fn write(&self) -> RefMut<InnerState> {
+        self.0.borrow_mut()
     }
 
     pub fn spawn<F: Future<Item = (), Error = ()> + 'static>(&self, f: F) {
