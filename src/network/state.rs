@@ -1,4 +1,4 @@
-use std::net::SocketAddr;
+use std::net::{SocketAddr, IpAddr};
 use std::time::Duration;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -102,6 +102,10 @@ impl NetworkState {
                 }
                 iter_ok(addresses)
                     .filter(move |address| !state.read().sockets.contains_key(&address))
+                    .filter(|address| match address.internal_address.ip() {
+                        IpAddr::V4(_) => true,
+                        IpAddr::V6(v6) => v6.is_global(),
+                    })
                     .and_then(move |address| {
                         request_external_address(address.clone(), &state2.read().handle)
                             .or_else(|err| {
