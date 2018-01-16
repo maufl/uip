@@ -127,6 +127,9 @@ impl State {
     }
 
     fn open_ctl_socket(&self) {
+        if self.read().ctl_socket == "" {
+            return;
+        }
         let state = self.clone();
         let done = UnixListener::bind(&self.read().ctl_socket, &self.read().handle)
             .expect("Unable to open unix control socket")

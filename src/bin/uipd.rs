@@ -5,7 +5,10 @@ extern crate tokio_file_unix;
 extern crate tokio_io;
 extern crate tokio_signal;
 extern crate futures;
+#[macro_use]
+extern crate log;
 extern crate env_logger;
+extern crate clap;
 
 extern crate uip;
 
@@ -15,30 +18,34 @@ use uip::{State, Id};
 use tokio_core::reactor::Core;
 use std::fs::File;
 use std::path::Path;
-use std::env;
 use futures::stream::Stream;
 use futures::Future;
+use clap::{Arg, App, SubCommand};
 
 fn main() {
     env_logger::init().unwrap();
+    let matches = app().get_matches();
 
     let mut core = Core::new().unwrap();
-    let config_file_path = if env::args().count() > 1 {
-        env::args().nth(1).expect("No config file given")
-    } else {
-        ".server.json".to_string()
-    };
-    let state = if Path::new(&config_file_path).is_file() {
-        let config = match read_configuration(config_file_path.to_string()) {
-            Ok(c) => c,
-            Err(err) => return println!("{}", err),
-        };
-        State::from_configuration(config, core.handle())
-    } else {
-        println!("Generating new ID");
+
+    let config_file_path = matches.value_of("config").unwrap_or(".server.json");
+
+    if Some("generate-config") == matches.subcommand_name() {
         let id = Id::generate().expect("Unable to generate an ID");
-        State::from_id(id, core.handle())
+        let state = State::from_id(id, core.handle());
+        return write_configuration(&config_file_path, &state.to_configuration())
+            .unwrap_or_else(|err| error!("{}", err));
+    }
+
+    if !Path::new(&config_file_path).is_file() {
+        return error!("Configuration file {} does not exist", config_file_path);
     };
+    let config = match read_configuration(config_file_path.to_string()) {
+        Ok(c) => c,
+        Err(err) => return error!("{}", err),
+    };
+    let state = State::from_configuration(config, core.handle());
+
     println!("Starting client for ID {}", state.read().id.hash);
     core.handle().spawn(state.clone());
     let handle = core.handle();
@@ -50,6 +57,19 @@ fn main() {
             .map_err(|_| println!("Panic")),
     );
     let _ = write_configuration(&config_file_path, &state.to_configuration());
+}
+
+fn app() -> App<'static, 'static> {
+    App::new("The UIP daemon")
+        .version("0.1")
+        .author("Felix K. Maurer <maufl@maufl.de>")
+        .about("The UIP daemon provides peer to peer connectivity based on unique and stable peer ids.")
+        .arg(Arg::with_name("config")
+             .short("c")
+             .help("The configuration file.")
+             .takes_value(true))
+        .subcommand(SubCommand::with_name("generate-config")
+                    .about("generates a new configuration file with default values"))
 }
 
 fn read_configuration(path: String) -> Result<Configuration, String> {
@@ -67,7 +87,7 @@ fn write_configuration(path: &str, conf: &Configuration) -> Result<(), String> {
     let config_file = File::create(path).map_err(|err| {
         format!("Error while opening configuration file: {}", err)
     })?;
-    serde_json::to_writer(config_file, conf)
+    serde_json::to_writer_pretty(config_file, conf)
         .map(|_| ())
         .map_err(|err| {
             format!("Error while reading configuration file: {}", err)
