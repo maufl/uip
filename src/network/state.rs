@@ -10,8 +10,8 @@ use tokio_io::{AsyncRead, AsyncWrite};
 use bytes::BytesMut;
 use openssl::hash::{hash2, MessageDigest};
 use openssl::x509::X509;
-use openssl::ssl::{SslConnectorBuilder, SslAcceptorBuilder, SslMethod, SslVerifyMode,
-                   SSL_VERIFY_PEER};
+use openssl::ssl::{SslConnectorBuilder, SslConnector, SslAcceptorBuilder, SslMethod,
+                   SslVerifyMode, SSL_VERIFY_PEER};
 use openssl::stack::Stack;
 use tokio_openssl::{SslStream, SslConnectorExt, SslAcceptorExt};
 use std::io;
@@ -155,6 +155,7 @@ impl NetworkState {
         debug!("Opening new socket on address {}", addr);
         let socket = SharedSocket::bind(&addr, &self.read().handle)?;
         self.write().sockets.insert(address, socket.clone());
+        self.connect_to_relays(socket.clone());
         self.listen(socket);
         Ok(())
     }
@@ -182,7 +183,7 @@ impl NetworkState {
         self.write().relays.push(id);
     }
 
-    pub fn connect_to_relays(&self) {
+    pub fn connect_to_relays(&self, socket: SharedSocket) {
         for relay in &self.read().relays {
             let addr = match self.read().pib.lookup_peer_address(relay) {
                 Some(info) => info,
@@ -190,7 +191,7 @@ impl NetworkState {
             };
             let relay = relay.clone();
             println!("Connecting to relay {}", relay);
-            let future = self.open_transport(relay.clone(), addr)
+            let future = self.open_transport(relay.clone(), addr, socket.clone())
                 .and_then(|_| future::ok(()))
                 .map_err(move |err| {
                     println!("Unable to connect to peer {}: {}", relay, err)
@@ -287,37 +288,40 @@ impl NetworkState {
                 io::Error::new(io::ErrorKind::NotFound, "peer address not found")
             })
             .into_future()
-            .and_then(move |addr| state.open_transport(remote_id, addr))
+            .and_then(move |addr| state.connect_with_address(remote_id, addr))
+    }
+
+    fn connect_with_address(
+        &self,
+        remote_id: String,
+        address: SocketAddr,
+    ) -> impl Future<Item = Transport, Error = io::Error> {
+        let state = self.clone();
+        self.read()
+            .sockets
+            .values()
+            .next()
+            .cloned()
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::NotConnected, "No socket is currently open")
+            })
+            .into_future()
+            .and_then(move |socket| {
+                state.open_transport(remote_id, address, socket.clone())
+            })
     }
 
     fn open_transport(
         &self,
         id: String,
         addr: SocketAddr,
+        socket: SharedSocket,
     ) -> impl Future<Item = Transport, Error = io::Error> {
-        let connector = {
-            let mut builder = SslConnectorBuilder::new(SslMethod::dtls()).expect(
-                "Unable to build new SSL connector",
-            );
-            builder.set_verify(SslVerifyMode::empty());
-            builder.set_certificate(&self.read().id.cert).expect(
-                "Unable to get reference to client certificate",
-            );
-            builder.set_private_key(&self.read().id.key).expect(
-                "Unable to get a reference to the client key",
-            );
-            builder.build()
-        };
+        let connector = self.ssl_connector();
         let state = self.clone();
         let id2 = id.clone();
-        self.read()
-            .sockets
-            .values()
-            .next()
-            .ok_or_else(|| {
-                io::Error::new(io::ErrorKind::NotConnected, "Currently not connected")
-            })
-            .and_then(|socket| socket.connect(addr))
+        socket
+            .connect(addr)
             .into_future()
             .and_then(move |stream| {
                 connector.connect_async(id.as_ref(), stream).map_err(|err| {
@@ -330,6 +334,19 @@ impl NetworkState {
                 state.add_connection(id2, conn.clone());
                 Ok(conn)
             })
+    }
+
+    fn ssl_connector(&self) -> SslConnector {
+        let mut builder =
+            SslConnectorBuilder::new(SslMethod::dtls()).expect("Unable to build new SSL connector");
+        builder.set_verify(SslVerifyMode::empty());
+        builder.set_certificate(&self.read().id.cert).expect(
+            "Unable to get reference to client certificate",
+        );
+        builder.set_private_key(&self.read().id.key).expect(
+            "Unable to get a reference to the client key",
+        );
+        builder.build()
     }
 
     pub fn deliver_frame(&self, host_id: String, channel_id: u16, data: BytesMut) {
@@ -376,7 +393,6 @@ impl Future for NetworkState {
 
     fn poll(&mut self) -> Poll<(), ()> {
         self.open_sockets();
-        self.connect_to_relays();
         self.observe_network_changes();
         Ok(Async::NotReady)
     }

@@ -87,7 +87,6 @@ fn main() {
                 } else {
                     let id = args.nth(2).expect("Peer id required").to_string();
                     state2.write().network.add_relay(id);
-                    state2.write().network.connect_to_relays();
                 }
             } else if command.starts_with("send ") {
                 let mut args = command.split_whitespace();
