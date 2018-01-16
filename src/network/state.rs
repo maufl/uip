@@ -22,6 +22,7 @@ use id::Id;
 use network::{Transport, LocalAddress, SharedSocket};
 use network::discovery::{discover_addresses, request_external_address, AddressDiscoveryError};
 use network::change::Listener;
+use network::protocol::{Message, PeerInfo};
 
 pub struct InnerState {
     pub id: Id,
@@ -354,6 +355,9 @@ impl NetworkState {
     }
 
     pub fn deliver_frame(&self, host_id: String, channel_id: u16, data: BytesMut) {
+        if channel_id == 0 {
+            return self.process_control_message(host_id, data);
+        }
         let task = self.read()
             .upstream
             .clone()
@@ -361,6 +365,19 @@ impl NetworkState {
             .map(|_| ())
             .map_err(|err| warn!("Failed to pass message to upstream: {}", err));
         self.spawn(task);
+    }
+
+    pub fn process_control_message(&self, host_id: String, data: BytesMut) {
+        match Message::deserialize_from_msgpck(&data.freeze()) {
+            Message::PeerInfo(peer_info) => {
+                info!(
+                    "Received new peer information from {}: {:?}",
+                    host_id,
+                    peer_info
+                )
+            }
+            Message::Invalid(_) => warn!("Received invalid control message from peer {}", host_id),
+        }
     }
 
     pub fn send_frame(&self, host_id: String, channel_id: u16, data: BytesMut) {

@@ -21,8 +21,9 @@ impl Message {
         Ok(writer.into_inner())
     }
 
-    pub fn deserialize_from_msgpck(buffer: &Bytes) -> Result<Message, DecodeError> {
+    pub fn deserialize_from_msgpck(buffer: &Bytes) -> Message {
         Deserialize::deserialize(&mut Deserializer::new(buffer.as_ref()))
+            .unwrap_or_else(|_| Message::Invalid(buffer.to_vec()))
     }
 }
 
