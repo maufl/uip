@@ -39,11 +39,11 @@ fn main() {
                 return println!("Error while reading configuration file: {}", err);
             }
         };
-        State::from_configuration(config, core.handle())
+        State::from_configuration(config, &core.handle())
     } else {
         println!("Generating new ID");
         let id = Identity::generate().expect("Unable to generate an ID");
-        State::from_id(id, core.handle())
+        State::from_id(id, &core.handle())
     };
     println!("Starting client for ID {}", state.read().id.identifier);
 

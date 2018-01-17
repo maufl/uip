@@ -91,7 +91,7 @@ pub fn request_external_address(
     address: LocalAddress,
     handle: &Handle,
 ) -> Box<Future<Item = LocalAddress, Error = AddressDiscoveryError> + 'static> {
-    let default_address = address.clone();
+    let default_address = address;
     let internal = match address.internal {
         SocketAddr::V4(addr) => addr,
         _ => {

@@ -17,7 +17,7 @@ pub struct Transport {
 
 impl Transport {
     pub fn from_tls_stream<S>(
-        state: NetworkState,
+        state: &NetworkState,
         stream: SslStream<S>,
         remote_id: String,
     ) -> Transport

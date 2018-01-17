@@ -28,7 +28,7 @@ impl Identifier {
 
 impl fmt::Display for Identifier {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        for byte in self.0.iter() {
+        for byte in &self.0 {
             write!(f, "{:02X}", byte)?;
         }
         Ok(())
@@ -106,7 +106,7 @@ where
 impl Clone for Identity {
     fn clone(&self) -> Identity {
         Identity {
-            identifier: self.identifier.clone(),
+            identifier: self.identifier,
             key: PKey::private_key_from_pem(&self.key.private_key_to_pem().expect(
                 "Unable to serialze key to pem",
             )).expect("Unable to deserialize key from pem"),

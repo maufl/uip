@@ -100,13 +100,13 @@ impl NetworkState {
                     };
                 }
                 iter_ok(addresses)
-                    .filter(move |address| !state.read().sockets.contains_key(&address))
+                    .filter(move |address| !state.read().sockets.contains_key(address))
                     .filter(|address| match address.internal.ip() {
                         IpAddr::V4(_) => true,
                         IpAddr::V6(v6) => v6.is_global(),
                     })
                     .and_then(move |address| {
-                        request_external_address(address.clone(), &state2.read().handle)
+                        request_external_address(address, &state2.read().handle)
                             .or_else(move |err| {
                                 match err {
                                     AddressDiscoveryError::UnsupportedAddress(_) => {}
@@ -129,7 +129,7 @@ impl NetworkState {
         self.read()
             .sockets
             .iter()
-            .filter_map(|(local_address, _socket)| local_address.external.clone())
+            .filter_map(|(local_address, _socket)| local_address.external)
             .collect()
     }
 
@@ -143,7 +143,7 @@ impl NetworkState {
 
     fn publish_addresses(&self) {
         let peer_information = self.my_peer_information();
-        for (_id, connections) in self.read().connections.iter() {
+        for connections in self.read().connections.values() {
             for connection in connections.iter() {
                 connection.send_peer_info(peer_information.clone());
             }
@@ -154,10 +154,10 @@ impl NetworkState {
         let mut addr: SocketAddr = address.internal;
         addr.set_port(self.read().port);
         debug!("Opening new socket on address {}", addr);
-        let socket = SharedSocket::bind(address.clone(), self.read().handle.clone())?;
+        let socket = SharedSocket::bind(address, self.read().handle.clone())?;
         self.write().sockets.insert(address, socket.clone());
-        self.connect_to_relays(socket.clone());
-        self.listen(socket);
+        self.connect_to_relays(&socket);
+        self.listen(&socket);
         Ok(())
     }
 
@@ -184,7 +184,7 @@ impl NetworkState {
         self.write().relays.push(id);
     }
 
-    pub fn connect_to_relays(&self, socket: SharedSocket) {
+    pub fn connect_to_relays(&self, socket: &SharedSocket) {
         for relay in &self.read().relays {
             let addr = match self.read().pib.lookup_peer_address(relay) {
                 Some(info) => info,
@@ -192,7 +192,7 @@ impl NetworkState {
             };
             let relay = relay.clone();
             println!("Connecting to relay {}", relay);
-            let future = self.open_transport(relay.clone(), addr, socket.clone())
+            let future = self.open_transport(relay.clone(), addr, socket)
                 .and_then(|_| future::ok(()))
                 .map_err(move |err| {
                     println!("Unable to connect to peer {}: {}", relay, err)
@@ -201,7 +201,7 @@ impl NetworkState {
         }
     }
 
-    fn listen(&self, listener: SharedSocket) {
+    fn listen(&self, listener: &SharedSocket) {
         let state = self.clone();
         let acceptor = {
             let id = &self.read().id;
@@ -258,7 +258,7 @@ impl NetworkState {
                 format!("Unable to generate identifier from certificate: {}", err)
             })?
         };
-        let transport = Transport::from_tls_stream(self.clone(), connection, id.to_string());
+        let transport = Transport::from_tls_stream(&self, connection, id.to_string());
         self.add_connection(id.to_string(), transport);
         Ok(())
     }
@@ -299,7 +299,7 @@ impl NetworkState {
             })
             .into_future()
             .and_then(move |socket| {
-                state.open_transport(remote_id, address, socket.clone())
+                state.open_transport(remote_id, address, &socket)
             })
     }
 
@@ -307,7 +307,7 @@ impl NetworkState {
         &self,
         id: String,
         addr: SocketAddr,
-        socket: SharedSocket,
+        socket: &SharedSocket,
     ) -> impl Future<Item = Transport, Error = io::Error> {
         let connector = self.ssl_connector();
         let state = self.clone();
@@ -321,7 +321,7 @@ impl NetworkState {
                 })
             })
             .and_then(move |stream| {
-                let conn = Transport::from_tls_stream(state.clone(), stream, id2.clone());
+                let conn = Transport::from_tls_stream(&state, stream, id2.clone());
                 conn.send_peer_info(state.my_peer_information());
                 state.add_connection(id2, conn.clone());
                 Ok(conn)

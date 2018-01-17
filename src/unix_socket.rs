@@ -42,7 +42,7 @@ impl UnixSocket {
             .map_err(|err| warn!("Unix stream error: {}", err));
         state.spawn(done);
         UnixSocket {
-            state: state.clone(),
+            state: state,
             sink: sender,
         }
     }

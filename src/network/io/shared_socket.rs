@@ -39,7 +39,7 @@ impl SharedSocket {
         let socket = SharedSocket(Rc::new(RefCell::new(Socket {
             inner: sock,
             connections: HashMap::new(),
-            handle: handle.clone(),
+            handle: handle,
             incoming: receiver,
             address: address,
         })));

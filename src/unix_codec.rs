@@ -36,7 +36,7 @@ impl Encoder for ControlProtocolCodec {
     fn encode(&mut self, msg: Frame, buf: &mut BytesMut) -> Result<()> {
         match msg {
             Frame::Connect(host_id, channel_id) => encode_connect(&host_id, channel_id, buf),
-            Frame::Data(data) => encode_data(data, buf),
+            Frame::Data(data) => encode_data(&data, buf),
         }
     }
 }
@@ -51,11 +51,11 @@ fn encode_connect(host_id: &str, channel_id: u16, buf: &mut BytesMut) -> Result<
     Ok(())
 }
 
-fn encode_data(data: BytesMut, buf: &mut BytesMut) -> Result<()> {
+fn encode_data(data: &BytesMut, buf: &mut BytesMut) -> Result<()> {
     buf.reserve(3 + data.len());
     buf.put_u8(2);
     buf.put_u16::<BigEndian>(data.len() as u16);
-    buf.put_slice(&data);
+    buf.put_slice(data);
     Ok(())
 }
 

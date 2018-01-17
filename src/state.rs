@@ -44,7 +44,7 @@ impl Drop for InnerState {
 pub struct State(pub Rc<RefCell<InnerState>>);
 
 impl State {
-    pub fn from_configuration(config: Configuration, handle: Handle) -> State {
+    pub fn from_configuration(config: Configuration, handle: &Handle) -> State {
         let (sink, source) = channel::<(String, u16, BytesMut)>(5);
         let state = State(Rc::new(RefCell::new(InnerState {
             id: config.id.clone(),
@@ -70,12 +70,13 @@ impl State {
         state
     }
 
-    pub fn from_id(id: Identity, handle: Handle) -> State {
+    pub fn from_id(id: Identity, handle: &Handle) -> State {
         let (sink, source) = channel::<(String, u16, BytesMut)>(5);
         let state = State(Rc::new(RefCell::new(InnerState {
+            ctl_socket: format!("/run/user/1000/uip/{}.ctl", id.identifier),
             id: id.clone(),
             network: NetworkState::new(
-                id.clone(),
+                id,
                 PeerInformationBase::new(),
                 Vec::new(),
                 0,
@@ -84,7 +85,6 @@ impl State {
             ),
             sockets: HashMap::new(),
             handle: handle.clone(),
-            ctl_socket: format!("/run/user/1000/uip/{}.ctl", id.identifier),
         })));
         let state2 = state.clone();
         let task = source

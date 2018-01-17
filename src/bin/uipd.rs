@@ -32,7 +32,7 @@ fn main() {
 
     if Some("generate-config") == matches.subcommand_name() {
         let id = Identity::generate().expect("Unable to generate an ID");
-        let state = State::from_id(id, core.handle());
+        let state = State::from_id(id, &core.handle());
         return write_configuration(&config_file_path, &state.to_configuration())
             .unwrap_or_else(|err| error!("{}", err));
     }
@@ -44,7 +44,7 @@ fn main() {
         Ok(c) => c,
         Err(err) => return error!("{}", err),
     };
-    let state = State::from_configuration(config, core.handle());
+    let state = State::from_configuration(config, &core.handle());
 
     println!("Starting client for ID {}", state.read().id.identifier);
     core.handle().spawn(state.clone());

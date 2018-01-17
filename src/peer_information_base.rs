@@ -48,7 +48,7 @@ impl PeerInformationBase {
     pub fn add_peer_address(&mut self, id: String, addr: SocketAddr) {
         self.peers
             .entry(id.clone())
-            .or_insert(Peer::new(id, vec![], vec![]))
+            .or_insert_with(|| Peer::new(id, vec![], vec![]))
             .addresses
             .push(addr)
     }

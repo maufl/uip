@@ -23,9 +23,7 @@ impl InterfaceName {
     pub fn copy_from_slice(slice: &[u8]) -> InterfaceName {
         let mut name = [0u8; INTERFACE_NAME_SIZE];
         let max = min(slice.len(), INTERFACE_NAME_SIZE as usize);
-        for i in 0..max {
-            name[i] = slice[i];
-        }
+        name[..max].clone_from_slice(&slice[..max]);
         InterfaceName(name)
     }
 }
