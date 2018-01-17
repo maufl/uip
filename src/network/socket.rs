@@ -9,6 +9,8 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::io::{Read, Write, Result, Error, ErrorKind};
 
+use network::LocalAddress;
+
 pub struct Connection {
     incoming: Receiver<Vec<u8>>,
     addr: SocketAddr,
@@ -68,30 +70,52 @@ struct Socket {
     connections: HashMap<SocketAddr, Sender<Vec<u8>>>,
     handle: Handle,
     incoming: Receiver<Connection>,
+    address: LocalAddress,
 }
 
 #[derive(Clone)]
 pub struct SharedSocket(Arc<RwLock<Socket>>);
 
 impl SharedSocket {
-    pub fn bind(addr: &SocketAddr, handle: &Handle) -> Result<SharedSocket> {
-        UdpSocket::bind(addr, handle).and_then(|s| SharedSocket::from_socket(s, handle.clone()))
+    pub fn bind(addr: LocalAddress, handle: Handle) -> Result<SharedSocket> {
+        UdpSocket::bind(&addr.internal_address, &handle).and_then(move |socket| {
+            SharedSocket::from_socket(socket, addr, handle)
+        })
     }
 
-    pub fn from_socket(sock: UdpSocket, handle: Handle) -> Result<SharedSocket> {
+    pub fn from_socket(
+        sock: UdpSocket,
+        address: LocalAddress,
+        handle: Handle,
+    ) -> Result<SharedSocket> {
         let (sender, receiver) = channel::<Connection>(10);
         let socket = SharedSocket(Arc::new(RwLock::new(Socket {
             inner: sock,
             connections: HashMap::new(),
             handle: handle.clone(),
             incoming: receiver,
+            address: address,
         })));
-        let socket_clone = socket.clone();
-        let handle_clone = handle.clone();
-        let local_address = socket.local_addr()?;
+        socket.listen(sender);
+        Ok(socket)
+    }
+
+    fn read(&self) -> RwLockReadGuard<Socket> {
+        self.0.read().expect("Unable to acquire read lock on state")
+    }
+
+    fn write(&self) -> RwLockWriteGuard<Socket> {
+        self.0.write().expect(
+            "Unable to acquire write lock on state",
+        )
+    }
+
+    fn listen(&self, sender: Sender<Connection>) {
+        let socket = self.clone();
+        let local_address = socket.read().address.internal_address;
         let task = poll_fn(move || {
             let mut datagram = [0u8; 1500];
-            let (read, addr) = match socket_clone.recv_from(&mut datagram) {
+            let (read, addr) = match socket.recv_from(&mut datagram) {
                 Err(e) => {
                     return match e.kind() {
                         ErrorKind::WouldBlock => Ok(Async::NotReady),
@@ -104,31 +128,16 @@ impl SharedSocket {
                 }
                 Ok(d) => d,
             };
-            if let Some(connection) = socket_clone.forward_or_new_connection(
-                &datagram[0..read],
-                addr,
-            )
-            {
+            if let Some(connection) = socket.forward_or_new_connection(&datagram[0..read], addr) {
                 let task = sender.clone().send(connection).map(|_| ()).map_err(|err| {
                     warn!("Unable to forward new UDP connection: {}", err)
                 });
-                handle_clone.spawn(task);
+                socket.read().handle.spawn(task);
             }
             Ok(Async::Ready(Some(())))
         }).collect()
             .map(move |_| info!("UDP socket {} was closed", local_address));
-        handle.spawn(task);
-        Ok(socket)
-    }
-
-    fn read(&self) -> RwLockReadGuard<Socket> {
-        self.0.read().expect("Unable to acquire read lock on state")
-    }
-
-    fn write(&self) -> RwLockWriteGuard<Socket> {
-        self.0.write().expect(
-            "Unable to acquire write lock on state",
-        )
+        self.read().handle.spawn(task);
     }
 
     pub fn local_addr(&self) -> Result<SocketAddr> {

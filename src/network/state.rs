@@ -156,7 +156,7 @@ impl NetworkState {
         let mut addr: SocketAddr = address.internal_address;
         addr.set_port(self.read().port);
         debug!("Opening new socket on address {}", addr);
-        let socket = SharedSocket::bind(&addr, &self.read().handle)?;
+        let socket = SharedSocket::bind(address.clone(), self.read().handle.clone())?;
         self.write().sockets.insert(address, socket.clone());
         self.connect_to_relays(socket.clone());
         self.listen(socket);
