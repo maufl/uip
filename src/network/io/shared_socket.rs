@@ -2,8 +2,9 @@ use tokio_core::net::UdpSocket;
 use tokio_core::reactor::Handle;
 use futures::sync::mpsc::{channel, Sender, Receiver};
 use futures::stream::poll_fn;
+use std::rc::Rc;
+use std::cell::{RefCell, Ref, RefMut};
 use futures::{Future, Poll, Async, Stream, Sink};
-use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::io::{Result, ErrorKind};
@@ -20,7 +21,7 @@ struct Socket {
 }
 
 #[derive(Clone)]
-pub struct SharedSocket(Arc<RwLock<Socket>>);
+pub struct SharedSocket(Rc<RefCell<Socket>>);
 
 impl SharedSocket {
     pub fn bind(addr: LocalAddress, handle: Handle) -> Result<SharedSocket> {
@@ -35,7 +36,7 @@ impl SharedSocket {
         handle: Handle,
     ) -> Result<SharedSocket> {
         let (sender, receiver) = channel::<Connection>(10);
-        let socket = SharedSocket(Arc::new(RwLock::new(Socket {
+        let socket = SharedSocket(Rc::new(RefCell::new(Socket {
             inner: sock,
             connections: HashMap::new(),
             handle: handle.clone(),
@@ -46,14 +47,12 @@ impl SharedSocket {
         Ok(socket)
     }
 
-    fn read(&self) -> RwLockReadGuard<Socket> {
-        self.0.read().expect("Unable to acquire read lock on state")
+    fn read(&self) -> Ref<Socket> {
+        self.0.borrow()
     }
 
-    fn write(&self) -> RwLockWriteGuard<Socket> {
-        self.0.write().expect(
-            "Unable to acquire write lock on state",
-        )
+    fn write(&self) -> RefMut<Socket> {
+        self.0.borrow_mut()
     }
 
     fn listen(&self, sender: Sender<Connection>) {
