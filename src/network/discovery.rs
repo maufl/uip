@@ -1,9 +1,9 @@
-use std::net::{SocketAddr, SocketAddrV4};
+use std::net::SocketAddr;
 use std::error::Error;
 use std::fmt::{self, Display};
 
 use futures::{Stream, IntoFuture, Future};
-use futures::future::{ok, err};
+use futures::future::err;
 use futures::stream::iter_ok;
 use tokio_core::reactor::Handle;
 

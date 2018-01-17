@@ -1,69 +1,15 @@
 use tokio_core::net::UdpSocket;
 use tokio_core::reactor::Handle;
-use tokio_io::{AsyncRead, AsyncWrite};
 use futures::sync::mpsc::{channel, Sender, Receiver};
 use futures::stream::poll_fn;
 use futures::{Future, Poll, Async, Stream, Sink};
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::io::{Read, Write, Result, Error, ErrorKind};
+use std::io::{Result, ErrorKind};
 
-use network::LocalAddress;
+use network::{LocalAddress, Connection};
 
-pub struct Connection {
-    incoming: Receiver<Vec<u8>>,
-    addr: SocketAddr,
-    socket: SharedSocket,
-}
-
-impl Connection {
-    fn new(incoming: Receiver<Vec<u8>>, addr: SocketAddr, socket: SharedSocket) -> Connection {
-        Connection {
-            incoming: incoming,
-            addr: addr,
-            socket: socket,
-        }
-    }
-
-    pub fn local_addr(&self) -> Result<SocketAddr> {
-        Ok(self.addr)
-    }
-}
-
-impl Read for Connection {
-    fn read(&mut self, mut buf: &mut [u8]) -> Result<usize> {
-        let async = self.incoming.poll().expect(
-            "Error while polling futures Receiver!",
-        );
-        match async {
-            Async::NotReady => Err(Error::new(ErrorKind::WouldBlock, "no bytes ready")),
-            Async::Ready(None) => Err(Error::new(ErrorKind::UnexpectedEof, "end of file")),
-            Async::Ready(Some(recv)) => {
-                buf[..recv.len()].clone_from_slice(recv.as_slice());
-                Ok(recv.len())
-            }
-        }
-    }
-}
-
-impl AsyncRead for Connection {}
-
-impl Write for Connection {
-    fn write(&mut self, buf: &[u8]) -> Result<usize> {
-        self.socket.send_to(buf, &self.addr)
-    }
-
-    fn flush(&mut self) -> Result<()> {
-        Ok(())
-    }
-}
-
-impl AsyncWrite for Connection {
-    fn shutdown(&mut self) -> Poll<(), Error> {
-        Ok(Async::Ready(()))
-    }
-}
 
 struct Socket {
     inner: UdpSocket,

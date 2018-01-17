@@ -1,11 +1,10 @@
 use tokio_io::{AsyncRead, AsyncWrite};
-use std::io::{Error, ErrorKind};
 use futures::{Stream, Sink, Future};
 use futures::sync::mpsc::{Sender, SendError, channel};
 use tokio_openssl::SslStream;
-use network::NetworkState;
-use bytes::{BytesMut, BufMut};
+use bytes::BytesMut;
 
+use network::NetworkState;
 use super::codec::{Codec, Frame};
 use peer_information_base::Peer;
 use network::protocol::{Message, PeerInfo};
@@ -69,7 +68,7 @@ impl Transport {
 
     pub fn send_peer_info(&self, peer: Peer) {
         let peer_info = Message::PeerInfo(PeerInfo { peer: peer });
-        let mut buf = BytesMut::with_capacity(1500);
+        let buf = BytesMut::with_capacity(1500);
         let buf = match peer_info.serialize_to_msgpck(buf) {
             Err(err) => {
                 return warn!(

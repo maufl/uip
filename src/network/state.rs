@@ -93,7 +93,7 @@ impl NetworkState {
                     .collect();
                 for address in stale {
                     info!("Closing stale socket {}", address.internal_address);
-                    if let Some(socket) = state.write().sockets.remove(&address) {
+                    if let Some(_socket) = state.write().sockets.remove(&address) {
                         info!("Closed socket {}", address.internal_address);
                     } else {
                         info!("No socket found for {}", address.internal_address);

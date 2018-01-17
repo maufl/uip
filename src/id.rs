@@ -2,7 +2,7 @@ use openssl::rsa::Rsa;
 use openssl::pkey::PKey;
 use openssl::x509::{X509, X509Builder, X509NameBuilder};
 use openssl::error::ErrorStack;
-use openssl::hash::{hash2, MessageDigest};
+use openssl::hash::MessageDigest;
 use openssl::sha::sha256;
 use openssl::asn1::Asn1Time;
 use std::ops::Deref;
@@ -48,7 +48,7 @@ impl<'de> Deserialize<'de> for Identifier {
             return Err(D::Error::invalid_length(string.len(), &"64 characters"));
         }
         let mut ident = [0u8; 32];
-        for i in (0..32) {
+        for i in 0..32 {
             ident[i] = u8::from_str_radix(&string[i * 2..i * 2 + 2], 16).map_err(
                 |_err| {
                     D::Error::invalid_value(

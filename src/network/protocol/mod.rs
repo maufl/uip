@@ -1,9 +1,6 @@
-use std::io::{Read, Write};
-
 use serde::{Deserialize, Serialize};
 use rmp_serde::{Deserializer, Serializer};
 use rmp_serde::encode::Error as EncodeError;
-use rmp_serde::decode::Error as DecodeError;
 use bytes::{BytesMut, Bytes, BufMut};
 
 use peer_information_base::Peer;
