@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::cell::{RefCell, Ref, RefMut};
-use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use futures::{Future, Poll, Stream};
 use futures::sync::mpsc::channel;
 use tokio_core::reactor::Handle;
@@ -17,12 +16,12 @@ use peer_information_base::PeerInformationBase;
 use configuration::Configuration;
 use unix_codec::{ControlProtocolCodec, Frame};
 use unix_socket::UnixSocket;
-use id::Id;
+use Identity;
 
 
 
 pub struct InnerState {
-    pub id: Id,
+    pub id: Identity,
     sockets: HashMap<(String, u16), UnixSocket>,
     handle: Handle,
     ctl_socket: String,
@@ -71,13 +70,12 @@ impl State {
         state
     }
 
-    pub fn from_id(id: Id, handle: Handle) -> State {
+    pub fn from_id(id: Identity, handle: Handle) -> State {
         let (sink, source) = channel::<(String, u16, BytesMut)>(5);
-        let hash = id.hash.clone();
         let state = State(Rc::new(RefCell::new(InnerState {
             id: id.clone(),
             network: NetworkState::new(
-                id,
+                id.clone(),
                 PeerInformationBase::new(),
                 Vec::new(),
                 0,
@@ -86,7 +84,7 @@ impl State {
             ),
             sockets: HashMap::new(),
             handle: handle.clone(),
-            ctl_socket: format!("/run/user/1000/uip/{}.ctl", hash),
+            ctl_socket: format!("/run/user/1000/uip/{}.ctl", id.identifier),
         })));
         let state2 = state.clone();
         let task = source

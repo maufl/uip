@@ -13,7 +13,7 @@ extern crate clap;
 extern crate uip;
 
 use uip::Configuration;
-use uip::{State, Id};
+use uip::{State, Identity};
 
 use tokio_core::reactor::Core;
 use std::fs::File;
@@ -31,7 +31,7 @@ fn main() {
     let config_file_path = matches.value_of("config").unwrap_or(".server.json");
 
     if Some("generate-config") == matches.subcommand_name() {
-        let id = Id::generate().expect("Unable to generate an ID");
+        let id = Identity::generate().expect("Unable to generate an ID");
         let state = State::from_id(id, core.handle());
         return write_configuration(&config_file_path, &state.to_configuration())
             .unwrap_or_else(|err| error!("{}", err));
@@ -46,7 +46,7 @@ fn main() {
     };
     let state = State::from_configuration(config, core.handle());
 
-    println!("Starting client for ID {}", state.read().id.hash);
+    println!("Starting client for ID {}", state.read().id.identifier);
     core.handle().spawn(state.clone());
     let handle = core.handle();
     let _ = core.run(

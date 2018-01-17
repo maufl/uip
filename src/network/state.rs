@@ -9,7 +9,6 @@ use futures::sync::mpsc::Sender;
 use tokio_core::reactor::Handle;
 use tokio_io::{AsyncRead, AsyncWrite};
 use bytes::BytesMut;
-use openssl::hash::{hash2, MessageDigest};
 use openssl::x509::X509;
 use openssl::ssl::{SslConnectorBuilder, SslConnector, SslAcceptorBuilder, SslMethod,
                    SslVerifyMode, SSL_VERIFY_PEER};
@@ -19,14 +18,14 @@ use std::io;
 use std::error::Error;
 
 use peer_information_base::{Peer, PeerInformationBase};
-use id::Id;
+use {Identity, Identifier};
 use network::{Transport, LocalAddress, SharedSocket};
 use network::discovery::{discover_addresses, request_external_address, AddressDiscoveryError};
 use network::change::Listener;
-use network::protocol::{Message, PeerInfo};
+use network::protocol::Message;
 
 pub struct InnerState {
-    pub id: Id,
+    pub id: Identity,
     pub pib: PeerInformationBase,
     connections: HashMap<String, Vec<Transport>>,
     pub relays: Vec<String>,
@@ -41,7 +40,7 @@ pub struct NetworkState(Rc<RefCell<InnerState>>);
 
 impl NetworkState {
     pub fn new(
-        id: Id,
+        id: Identity,
         pib: PeerInformationBase,
         relays: Vec<String>,
         port: u16,
@@ -138,7 +137,7 @@ impl NetworkState {
 
     fn my_peer_information(&self) -> Peer {
         Peer::new(
-            self.read().id.hash.clone(),
+            self.read().id.identifier.to_string(),
             self.external_addresses(),
             self.read().relays.clone(),
         )
@@ -257,21 +256,12 @@ impl NetworkState {
             let x509 = session.peer_certificate().ok_or(
                 "Client did not provide a certificate",
             )?;
-            let pub_key = x509.public_key().map_err(|err| {
-                format!("Unable to get public key from certificate: {}", err)
-            })?;
-            let pub_key_pem = pub_key.public_key_to_pem().map_err(|err| {
-                format!("Error while serializing public key to pem: {}", err)
-            })?;
-            hash2(MessageDigest::sha256(), &pub_key_pem)
-                .map_err(|err| err.description().to_string())?
-                .iter()
-                .map(|byte| format!("{:02X}", byte))
-                .collect::<Vec<String>>()
-                .join("")
+            Identifier::from_x509_certificate(&x509).map_err(|err| {
+                format!("Unable to generate identifier from certificate: {}", err)
+            })?
         };
-        let transport = Transport::from_tls_stream(self.clone(), connection, id.clone());
-        self.add_connection(id, transport);
+        let transport = Transport::from_tls_stream(self.clone(), connection, id.to_string());
+        self.add_connection(id.to_string(), transport);
         Ok(())
     }
 

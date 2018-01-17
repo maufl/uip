@@ -11,7 +11,7 @@ extern crate uip;
 
 use uip::Configuration;
 use uip::State;
-use uip::Id;
+use uip::Identity;
 
 use tokio_core::reactor::Core;
 use std::fs::File;
@@ -42,10 +42,10 @@ fn main() {
         State::from_configuration(config, core.handle())
     } else {
         println!("Generating new ID");
-        let id = Id::generate().expect("Unable to generate an ID");
+        let id = Identity::generate().expect("Unable to generate an ID");
         State::from_id(id, core.handle())
     };
-    println!("Starting client for ID {}", state.read().id.hash);
+    println!("Starting client for ID {}", state.read().id.identifier);
 
     let state2 = state.clone();
     core.handle().spawn(state);

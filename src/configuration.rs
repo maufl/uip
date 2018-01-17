@@ -1,9 +1,9 @@
 use peer_information_base::PeerInformationBase;
-use id::Id;
+use Identity;
 
 #[derive(Serialize, Deserialize)]
 pub struct Configuration {
-    pub id: Id,
+    pub id: Identity,
     pub pib: PeerInformationBase,
     pub relays: Vec<String>,
     pub port: u16,
