@@ -79,7 +79,7 @@ impl NetworkState {
         let task = discover_addresses()
             .map_err(|err| warn!("Unable to enumerate local addresses: {}", err))
             .map(move |mut addr| {
-                addr.internal_address.set_port(port);
+                addr.internal.set_port(port);
                 addr
             })
             .collect()
@@ -92,22 +92,22 @@ impl NetworkState {
                     .cloned()
                     .collect();
                 for address in stale {
-                    info!("Closing stale socket {}", address.internal_address);
+                    info!("Closing stale socket {}", address.internal);
                     if let Some(_socket) = state.write().sockets.remove(&address) {
-                        info!("Closed socket {}", address.internal_address);
+                        info!("Closed socket {}", address.internal);
                     } else {
-                        info!("No socket found for {}", address.internal_address);
+                        info!("No socket found for {}", address.internal);
                     };
                 }
                 iter_ok(addresses)
                     .filter(move |address| !state.read().sockets.contains_key(&address))
-                    .filter(|address| match address.internal_address.ip() {
+                    .filter(|address| match address.internal.ip() {
                         IpAddr::V4(_) => true,
                         IpAddr::V6(v6) => v6.is_global(),
                     })
                     .and_then(move |address| {
                         request_external_address(address.clone(), &state2.read().handle)
-                            .or_else(|err| {
+                            .or_else(move |err| {
                                 match err {
                                     AddressDiscoveryError::UnsupportedAddress(_) => {}
                                     _ => warn!("Error while requesting external address: {}", err),
@@ -129,9 +129,7 @@ impl NetworkState {
         self.read()
             .sockets
             .iter()
-            .filter_map(|(local_address, _socket)| {
-                local_address.external_address.clone()
-            })
+            .filter_map(|(local_address, _socket)| local_address.external.clone())
             .collect()
     }
 
@@ -153,7 +151,7 @@ impl NetworkState {
     }
 
     fn open_socket(&self, address: LocalAddress) -> io::Result<()> {
-        let mut addr: SocketAddr = address.internal_address;
+        let mut addr: SocketAddr = address.internal;
         addr.set_port(self.read().port);
         debug!("Opening new socket on address {}", addr);
         let socket = SharedSocket::bind(address.clone(), self.read().handle.clone())?;

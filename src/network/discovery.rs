@@ -74,7 +74,7 @@ pub fn discover_addresses()
                             match address.addr {
                                 Some(addr)
                                     if address.kind == Kind::Ipv4 || address.kind == Kind::Ipv6 => {
-                                    Some(LocalAddress::new(interface.name.clone(), addr, None))
+                                    Some(LocalAddress::new(&interface.name, addr, None))
                                 }
                                 _ => None,
                             }
@@ -92,13 +92,13 @@ pub fn request_external_address(
     handle: &Handle,
 ) -> Box<Future<Item = LocalAddress, Error = AddressDiscoveryError> + 'static> {
     let default_address = address.clone();
-    let internal_address = match address.internal_address {
+    let internal = match address.internal {
         SocketAddr::V4(addr) => addr,
         _ => {
             return Box::new(err(AddressDiscoveryError::UnsupportedAddress(
                 format!(
                     "Address {} is not supported for external address discovery",
-                    address.internal_address,
+                    address.internal,
                 ).to_owned(),
             )))
         }
@@ -107,14 +107,14 @@ pub fn request_external_address(
         .from_err::<AddressDiscoveryError>()
         .and_then(move |gateway| {
             gateway
-                .get_any_address(PortMappingProtocol::UDP, internal_address, 0, "UIP")
+                .get_any_address(PortMappingProtocol::UDP, internal, 0, "UIP")
                 .from_err()
         })
-        .map(move |external_address| {
+        .map(move |external| {
             LocalAddress::new(
                 address.interface,
-                SocketAddr::V4(internal_address),
-                Some(SocketAddr::V4(external_address)),
+                SocketAddr::V4(internal),
+                Some(SocketAddr::V4(external)),
             )
         })
         .or_else(move |err| {

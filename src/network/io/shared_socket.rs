@@ -25,7 +25,7 @@ pub struct SharedSocket(Rc<RefCell<Socket>>);
 
 impl SharedSocket {
     pub fn bind(addr: LocalAddress, handle: Handle) -> Result<SharedSocket> {
-        UdpSocket::bind(&addr.internal_address, &handle).and_then(move |socket| {
+        UdpSocket::bind(&addr.internal, &handle).and_then(move |socket| {
             SharedSocket::from_socket(socket, addr, handle)
         })
     }
@@ -57,7 +57,7 @@ impl SharedSocket {
 
     fn listen(&self, sender: Sender<Connection>) {
         let socket = self.clone();
-        let local_address = socket.read().address.internal_address;
+        let local_address = socket.read().address.internal;
         let task = poll_fn(move || {
             let mut datagram = [0u8; 1500];
             let (read, addr) = match socket.recv_from(&mut datagram) {
