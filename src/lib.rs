@@ -21,13 +21,12 @@ extern crate nix;
 extern crate libc;
 extern crate mio;
 
-mod peer_information_base;
+mod data;
 mod unix;
 mod configuration;
 mod state;
-mod id;
 mod network;
 
 pub use configuration::Configuration;
 pub use state::State;
-pub use id::{Identity, Identifier};
+pub use data::{Identity, Identifier};

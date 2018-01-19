@@ -12,7 +12,7 @@ use std::path::Path;
 use std::fs;
 
 use network::NetworkState;
-use peer_information_base::PeerInformationBase;
+use data::PeerInformationBase;
 use configuration::Configuration;
 use unix::{UnixSocket, ControlProtocolCodec, Frame};
 use {Identity, Identifier};

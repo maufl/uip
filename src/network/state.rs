@@ -17,7 +17,7 @@ use tokio_openssl::{SslStream, SslConnectorExt, SslAcceptorExt};
 use std::io;
 use std::error::Error;
 
-use peer_information_base::{Peer, PeerInformationBase};
+use data::{Peer, PeerInformationBase};
 use {Identity, Identifier};
 use network::{Transport, LocalAddress, SharedSocket};
 use network::discovery::{discover_addresses, request_external_address, AddressDiscoveryError};

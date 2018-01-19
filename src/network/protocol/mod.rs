@@ -3,7 +3,7 @@ use rmp_serde::{Deserializer, Serializer};
 use rmp_serde::encode::Error as EncodeError;
 use bytes::{BytesMut, Bytes, BufMut};
 
-use peer_information_base::Peer;
+use data::Peer;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Message {

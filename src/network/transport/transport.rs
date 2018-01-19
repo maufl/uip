@@ -6,7 +6,7 @@ use bytes::BytesMut;
 
 use network::NetworkState;
 use super::codec::{Codec, Frame};
-use peer_information_base::Peer;
+use data::Peer;
 use network::protocol::{Message, PeerInfo};
 use Identifier;
 

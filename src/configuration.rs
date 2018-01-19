@@ -1,4 +1,4 @@
-use peer_information_base::PeerInformationBase;
+use data::PeerInformationBase;
 use {Identity, Identifier};
 
 #[derive(Serialize, Deserialize)]
