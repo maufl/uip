@@ -7,6 +7,7 @@ use tokio_io::codec::Framed;
 
 use state::State;
 use unix_codec::{Frame, ControlProtocolCodec};
+use Identifier;
 
 
 #[derive(Clone)]
@@ -19,7 +20,7 @@ impl UnixSocket {
     pub fn from_unix_socket(
         state: State,
         socket: Framed<UnixStream, ControlProtocolCodec>,
-        host_id: String,
+        host_id: Identifier,
         channel_id: u16,
     ) -> UnixSocket {
         let (sink, stream) = socket.split();
@@ -34,7 +35,7 @@ impl UnixSocket {
         let done = stream
             .for_each(move |frame| {
                 match frame {
-                    Frame::Data(buf) => state2.send_frame(host_id.clone(), channel_id, buf),
+                    Frame::Data(buf) => state2.send_frame(host_id, channel_id, buf),
                     Frame::Connect(_, _) => warn!("Unexpected UNIX message CONNECT"),
                 };
                 future::ok(())

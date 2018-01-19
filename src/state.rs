@@ -16,13 +16,13 @@ use peer_information_base::PeerInformationBase;
 use configuration::Configuration;
 use unix_codec::{ControlProtocolCodec, Frame};
 use unix_socket::UnixSocket;
-use Identity;
+use {Identity, Identifier};
 
 
 
 pub struct InnerState {
     pub id: Identity,
-    sockets: HashMap<(String, u16), UnixSocket>,
+    sockets: HashMap<(Identifier, u16), UnixSocket>,
     handle: Handle,
     ctl_socket: String,
     pub network: NetworkState,
@@ -45,7 +45,7 @@ pub struct State(pub Rc<RefCell<InnerState>>);
 
 impl State {
     pub fn from_configuration(config: Configuration, handle: &Handle) -> State {
-        let (sink, source) = channel::<(String, u16, BytesMut)>(5);
+        let (sink, source) = channel::<(Identifier, u16, BytesMut)>(5);
         let state = State(Rc::new(RefCell::new(InnerState {
             id: config.id.clone(),
             network: NetworkState::new(
@@ -71,7 +71,7 @@ impl State {
     }
 
     pub fn from_id(id: Identity, handle: &Handle) -> State {
-        let (sink, source) = channel::<(String, u16, BytesMut)>(5);
+        let (sink, source) = channel::<(Identifier, u16, BytesMut)>(5);
         let state = State(Rc::new(RefCell::new(InnerState {
             ctl_socket: format!("/run/user/1000/uip/{}.ctl", id.identifier),
             id: id.clone(),
@@ -150,11 +150,11 @@ impl State {
                         let unix_socket = UnixSocket::from_unix_socket(
                             state.clone(),
                             socket,
-                            host_id.clone(),
+                            host_id,
                             channel_id,
                         );
                         state.write().sockets.insert(
-                            (host_id.clone(), channel_id),
+                            (host_id, channel_id),
                             unix_socket,
                         );
                         Ok(())
@@ -170,11 +170,11 @@ impl State {
         self.spawn(done);
     }
 
-    pub fn send_frame(&self, host_id: String, channel_id: u16, data: BytesMut) {
+    pub fn send_frame(&self, host_id: Identifier, channel_id: u16, data: BytesMut) {
         self.read().network.send_frame(host_id, channel_id, data)
     }
 
-    pub fn deliver_frame(&self, host_id: String, channel_id: u16, data: BytesMut) {
+    pub fn deliver_frame(&self, host_id: Identifier, channel_id: u16, data: BytesMut) {
         println!(
             "Received new data from {} in channel {}: {:?}",
             host_id,

@@ -8,6 +8,7 @@ use network::NetworkState;
 use super::codec::{Codec, Frame};
 use peer_information_base::Peer;
 use network::protocol::{Message, PeerInfo};
+use Identifier;
 
 #[derive(Clone)]
 pub struct Transport {
@@ -19,7 +20,7 @@ impl Transport {
     pub fn from_tls_stream<S>(
         state: &NetworkState,
         stream: SslStream<S>,
-        remote_id: String,
+        remote_id: Identifier,
     ) -> Transport
     where
         S: AsyncRead + AsyncWrite + 'static,
@@ -43,11 +44,7 @@ impl Transport {
                     Frame::Ping => println!("Ping"),
                     Frame::Pong => println!("Pong"),
                     Frame::Data(channel_id, data) => {
-                        transport2.state.deliver_frame(
-                            remote_id.clone(),
-                            channel_id,
-                            data,
-                        )
+                        transport2.state.deliver_frame(remote_id, channel_id, data)
                     }
                 };
                 Ok(())

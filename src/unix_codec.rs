@@ -3,9 +3,10 @@ use byteorder::{BigEndian, ByteOrder};
 use bytes::BytesMut;
 use bytes::buf::BufMut;
 use tokio_io::codec::{Decoder, Encoder};
+use Identifier;
 
 pub enum Frame {
-    Connect(String, u16),
+    Connect(Identifier, u16),
     Data(BytesMut),
 }
 
@@ -42,7 +43,7 @@ impl Encoder for ControlProtocolCodec {
 }
 
 
-fn encode_connect(host_id: &str, channel_id: u16, buf: &mut BytesMut) -> Result<()> {
+fn encode_connect(host_id: &Identifier, channel_id: u16, buf: &mut BytesMut) -> Result<()> {
     buf.reserve(5 + host_id.len());
     buf.put_u8(1);
     buf.put_u16::<BigEndian>(host_id.len() as u16);
@@ -64,7 +65,7 @@ fn parse_connect(buf: &mut BytesMut) -> Result<Option<Frame>> {
     if buf.len() < len + 5 {
         return Ok(None);
     };
-    let host_id = String::from_utf8(buf.as_ref()[3..len + 3].to_vec())
+    let host_id = Identifier::copy_from_slice(&buf.as_ref()[3..len + 3])
         .map_err(|_| Error::new(ErrorKind::Other, "Invalid host identifier"))?;
     let channel_id = BigEndian::read_u16(&buf.as_ref()[len + 3..len + 5]);
     let _ = buf.split_to(len + 5);

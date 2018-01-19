@@ -33,7 +33,7 @@ fn main() {
     if Some("generate-config") == matches.subcommand_name() {
         let id = Identity::generate().expect("Unable to generate an ID");
         let state = State::from_id(id, &core.handle());
-        return write_configuration(&config_file_path, &state.to_configuration())
+        return write_configuration(config_file_path, &state.to_configuration())
             .unwrap_or_else(|err| error!("{}", err));
     }
 
@@ -56,7 +56,7 @@ fn main() {
             .map(|_| println!("Received CTRL-C"))
             .map_err(|_| println!("Panic")),
     );
-    let _ = write_configuration(&config_file_path, &state.to_configuration());
+    let _ = write_configuration(config_file_path, &state.to_configuration());
 }
 
 fn app() -> App<'static, 'static> {

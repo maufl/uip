@@ -7,11 +7,15 @@ use openssl::sha::sha256;
 use openssl::asn1::Asn1Time;
 use std::ops::Deref;
 use std::fmt;
+use std::str::FromStr;
+use std::default::Default;
 use serde::{Serialize, Deserialize, Serializer, Deserializer};
 use serde::de::{Error, Unexpected};
 
-#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
-pub struct Identifier([u8; 32]);
+const IDENTIFIER_LENGTH: usize = 32;
+
+#[derive(Debug, Copy, Clone, Default, PartialEq, Eq, Hash)]
+pub struct Identifier([u8; IDENTIFIER_LENGTH]);
 
 impl Identifier {
     pub fn from_x509_certificate(x509: &X509) -> Result<Identifier, ErrorStack> {
@@ -23,6 +27,44 @@ impl Identifier {
         let pub_key_der = key.public_key_to_der()?;
         let identifier = sha256(&pub_key_der);
         Ok(Identifier(identifier))
+    }
+
+    pub fn copy_from_slice(slice: &[u8]) -> Result<Identifier, String> {
+        if slice.len() < IDENTIFIER_LENGTH {
+            return Err("Slice length insufficient".to_string());
+        }
+        let mut identifier = [0u8; IDENTIFIER_LENGTH];
+        identifier.copy_from_slice(&slice[..IDENTIFIER_LENGTH]);
+        Ok(Identifier(identifier))
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self == &Self::default()
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl FromStr for Identifier {
+    type Err = String;
+
+    fn from_str(string: &str) -> Result<Identifier, String> {
+        if string.len() != 2 * IDENTIFIER_LENGTH {
+            return Err("String length insufficient".to_string());
+        }
+        let mut ident = [0u8; 32];
+        for i in 0..32 {
+            ident[i] = u8::from_str_radix(&string[i * 2..i * 2 + 2], 16).map_err(
+                |_err| "Invalid characters in string",
+            )?;
+        }
+        Ok(Identifier(ident))
     }
 }
 
@@ -44,11 +86,11 @@ impl Serialize for Identifier {
 impl<'de> Deserialize<'de> for Identifier {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Identifier, D::Error> {
         let string = String::deserialize(deserializer)?;
-        if string.len() != 64 {
+        if string.len() != 2 * IDENTIFIER_LENGTH {
             return Err(D::Error::invalid_length(string.len(), &"64 characters"));
         }
-        let mut ident = [0u8; 32];
-        for i in 0..32 {
+        let mut ident = [0u8; IDENTIFIER_LENGTH];
+        for i in 0..IDENTIFIER_LENGTH {
             ident[i] = u8::from_str_radix(&string[i * 2..i * 2 + 2], 16).map_err(
                 |_err| {
                     D::Error::invalid_value(

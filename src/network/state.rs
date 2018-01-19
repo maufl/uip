@@ -27,11 +27,11 @@ use network::protocol::Message;
 pub struct InnerState {
     pub id: Identity,
     pub pib: PeerInformationBase,
-    connections: HashMap<String, Vec<Transport>>,
-    pub relays: Vec<String>,
+    connections: HashMap<Identifier, Vec<Transport>>,
+    pub relays: Vec<Identifier>,
     pub port: u16,
     handle: Handle,
-    upstream: Sender<(String, u16, BytesMut)>,
+    upstream: Sender<(Identifier, u16, BytesMut)>,
     sockets: HashMap<LocalAddress, SharedSocket>,
 }
 
@@ -42,10 +42,10 @@ impl NetworkState {
     pub fn new(
         id: Identity,
         pib: PeerInformationBase,
-        relays: Vec<String>,
+        relays: Vec<Identifier>,
         port: u16,
         handle: Handle,
-        upstream: Sender<(String, u16, BytesMut)>,
+        upstream: Sender<(Identifier, u16, BytesMut)>,
     ) -> NetworkState {
         NetworkState(Rc::new(RefCell::new(InnerState {
             id: id,
@@ -135,7 +135,7 @@ impl NetworkState {
 
     fn my_peer_information(&self) -> Peer {
         Peer::new(
-            self.read().id.identifier.to_string(),
+            self.read().id.identifier,
             self.external_addresses(),
             self.read().relays.clone(),
         )
@@ -180,7 +180,7 @@ impl NetworkState {
         self.spawn(task);
     }
 
-    pub fn add_relay(&mut self, id: String) {
+    pub fn add_relay(&mut self, id: Identifier) {
         self.write().relays.push(id);
     }
 
@@ -190,9 +190,9 @@ impl NetworkState {
                 Some(info) => info,
                 None => continue,
             };
-            let relay = relay.clone();
             println!("Connecting to relay {}", relay);
-            let future = self.open_transport(relay.clone(), addr, socket)
+            let relay = *relay;
+            let future = self.open_transport(relay, addr, socket)
                 .and_then(|_| future::ok(()))
                 .map_err(move |err| {
                     println!("Unable to connect to peer {}: {}", relay, err)
@@ -258,12 +258,12 @@ impl NetworkState {
                 format!("Unable to generate identifier from certificate: {}", err)
             })?
         };
-        let transport = Transport::from_tls_stream(&self, connection, id.to_string());
-        self.add_connection(id.to_string(), transport);
+        let transport = Transport::from_tls_stream(self, connection, id);
+        self.add_connection(id, transport);
         Ok(())
     }
 
-    fn add_connection(&self, id: String, conn: Transport) {
+    fn add_connection(&self, id: Identifier, conn: Transport) {
         self.write()
             .connections
             .entry(id)
@@ -271,7 +271,7 @@ impl NetworkState {
             .push(conn);
     }
 
-    fn connect(&self, remote_id: String) -> impl Future<Item = Transport, Error = io::Error> {
+    fn connect(&self, remote_id: Identifier) -> impl Future<Item = Transport, Error = io::Error> {
         let state = self.clone();
         self.read()
             .pib
@@ -285,7 +285,7 @@ impl NetworkState {
 
     fn connect_with_address(
         &self,
-        remote_id: String,
+        remote_id: Identifier,
         address: SocketAddr,
     ) -> impl Future<Item = Transport, Error = io::Error> {
         let state = self.clone();
@@ -305,25 +305,26 @@ impl NetworkState {
 
     fn open_transport(
         &self,
-        id: String,
+        id: Identifier,
         addr: SocketAddr,
         socket: &SharedSocket,
     ) -> impl Future<Item = Transport, Error = io::Error> {
         let connector = self.ssl_connector();
         let state = self.clone();
-        let id2 = id.clone();
         socket
             .connect(addr)
             .into_future()
             .and_then(move |stream| {
-                connector.connect_async(id.as_ref(), stream).map_err(|err| {
-                    io::Error::new(io::ErrorKind::Other, format!("Handshake error: {:?}", err))
-                })
+                connector.connect_async(&id.to_string(), stream).map_err(
+                    |err| {
+                        io::Error::new(io::ErrorKind::Other, format!("Handshake error: {:?}", err))
+                    },
+                )
             })
             .and_then(move |stream| {
-                let conn = Transport::from_tls_stream(&state, stream, id2.clone());
+                let conn = Transport::from_tls_stream(&state, stream, id);
                 conn.send_peer_info(state.my_peer_information());
-                state.add_connection(id2, conn.clone());
+                state.add_connection(id, conn.clone());
                 Ok(conn)
             })
     }
@@ -341,7 +342,7 @@ impl NetworkState {
         builder.build()
     }
 
-    pub fn deliver_frame(&self, host_id: String, channel_id: u16, data: BytesMut) {
+    pub fn deliver_frame(&self, host_id: Identifier, channel_id: u16, data: BytesMut) {
         if channel_id == 0 {
             return self.process_control_message(host_id, data);
         }
@@ -354,7 +355,7 @@ impl NetworkState {
         self.spawn(task);
     }
 
-    pub fn process_control_message(&self, host_id: String, data: BytesMut) {
+    pub fn process_control_message(&self, host_id: Identifier, data: BytesMut) {
         match Message::deserialize_from_msgpck(&data.freeze()) {
             Message::PeerInfo(peer_info) => {
                 info!(
@@ -367,7 +368,7 @@ impl NetworkState {
         }
     }
 
-    pub fn send_frame(&self, host_id: String, channel_id: u16, data: BytesMut) {
+    pub fn send_frame(&self, host_id: Identifier, channel_id: u16, data: BytesMut) {
         let task = self.get_connection(host_id)
             .and_then(move |connection| {
                 connection.send_frame(channel_id, data).map_err(|_| {
@@ -381,7 +382,7 @@ impl NetworkState {
 
     pub fn get_connection(
         &self,
-        host_id: String,
+        host_id: Identifier,
     ) -> impl Future<Item = Transport, Error = io::Error> {
         let state = self.clone();
         self.read()

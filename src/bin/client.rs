@@ -11,7 +11,7 @@ extern crate uip;
 
 use uip::Configuration;
 use uip::State;
-use uip::Identity;
+use uip::{Identity, Identifier};
 
 use tokio_core::reactor::Core;
 use std::fs::File;
@@ -20,6 +20,7 @@ use futures::{Future, Stream};
 use std::env;
 use std::io::{Write, Error, ErrorKind};
 use std::net::SocketAddr;
+use std::str::FromStr;
 use bytes::BytesMut;
 
 fn main() {
@@ -71,7 +72,8 @@ fn main() {
                 if args.clone().count() < 4 {
                     println!("peer add requires ID and socket address")
                 } else {
-                    let id = args.nth(2).expect("Peer id required").to_string();
+                    let id = Identifier::from_str(args.nth(2).expect("Peer id required"))
+                        .expect("Invalid peer id");
                     let addr = args.next().expect("Peer address required");
                     let sock_addr: SocketAddr = addr.parse().expect("Invalid socket address");
                     let inner_state = state2.write();
@@ -85,7 +87,8 @@ fn main() {
                 if args.clone().count() < 3 {
                     println!("relay add requires ID")
                 } else {
-                    let id = args.nth(2).expect("Peer id required").to_string();
+                    let id = Identifier::from_str(args.nth(2).expect("Peer id required"))
+                        .expect("Invalid peer id");
                     state2.write().network.add_relay(id);
                 }
             } else if command.starts_with("send ") {
@@ -93,7 +96,8 @@ fn main() {
                 if args.clone().count() < 4 {
                     println!("send requires ID and channel number")
                 } else {
-                    let id = args.nth(1).expect("Peer id required").to_string();
+                    let id = Identifier::from_str(args.nth(1).expect("Peer id required"))
+                        .expect("Invalid peer id");
                     let channel = args.next()
                         .expect("Channel number required")
                         .parse::<u16>()
