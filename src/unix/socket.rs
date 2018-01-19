@@ -6,7 +6,7 @@ use tokio_uds::UnixStream;
 use tokio_io::codec::Framed;
 
 use state::State;
-use unix_codec::{Frame, ControlProtocolCodec};
+use unix::{Frame, ControlProtocolCodec};
 use Identifier;
 
 

@@ -14,8 +14,7 @@ use std::fs;
 use network::NetworkState;
 use peer_information_base::PeerInformationBase;
 use configuration::Configuration;
-use unix_codec::{ControlProtocolCodec, Frame};
-use unix_socket::UnixSocket;
+use unix::{UnixSocket, ControlProtocolCodec, Frame};
 use {Identity, Identifier};
 
 

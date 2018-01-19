@@ -22,8 +22,7 @@ extern crate libc;
 extern crate mio;
 
 mod peer_information_base;
-mod unix_socket;
-mod unix_codec;
+mod unix;
 mod configuration;
 mod state;
 mod id;
