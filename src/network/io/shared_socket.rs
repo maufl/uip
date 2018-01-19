@@ -9,8 +9,8 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::io::{Result, ErrorKind};
 
-use network::{LocalAddress, Connection};
-
+use network::LocalAddress;
+use super::Connection;
 
 struct Socket {
     inner: UdpSocket,

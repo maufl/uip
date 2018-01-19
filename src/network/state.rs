@@ -19,7 +19,7 @@ use std::error::Error;
 
 use data::{Peer, PeerInformationBase};
 use {Identity, Identifier};
-use network::{Transport, LocalAddress, SharedSocket};
+use network::{TransportConnection, LocalAddress, SharedSocket};
 use network::discovery::{discover_addresses, request_external_address, AddressDiscoveryError};
 use network::change::Listener;
 use network::protocol::Message;
@@ -27,7 +27,7 @@ use network::protocol::Message;
 pub struct InnerState {
     pub id: Identity,
     pub pib: PeerInformationBase,
-    connections: HashMap<Identifier, Vec<Transport>>,
+    connections: HashMap<Identifier, Vec<TransportConnection>>,
     pub relays: Vec<Identifier>,
     pub port: u16,
     handle: Handle,
@@ -258,12 +258,12 @@ impl NetworkState {
                 format!("Unable to generate identifier from certificate: {}", err)
             })?
         };
-        let transport = Transport::from_tls_stream(self, connection, id);
+        let transport = TransportConnection::from_tls_stream(self, connection, id);
         self.add_connection(id, transport);
         Ok(())
     }
 
-    fn add_connection(&self, id: Identifier, conn: Transport) {
+    fn add_connection(&self, id: Identifier, conn: TransportConnection) {
         self.write()
             .connections
             .entry(id)
@@ -271,7 +271,10 @@ impl NetworkState {
             .push(conn);
     }
 
-    fn connect(&self, remote_id: Identifier) -> impl Future<Item = Transport, Error = io::Error> {
+    fn connect(
+        &self,
+        remote_id: Identifier,
+    ) -> impl Future<Item = TransportConnection, Error = io::Error> {
         let state = self.clone();
         self.read()
             .pib
@@ -287,7 +290,7 @@ impl NetworkState {
         &self,
         remote_id: Identifier,
         address: SocketAddr,
-    ) -> impl Future<Item = Transport, Error = io::Error> {
+    ) -> impl Future<Item = TransportConnection, Error = io::Error> {
         let state = self.clone();
         self.read()
             .sockets
@@ -308,7 +311,7 @@ impl NetworkState {
         id: Identifier,
         addr: SocketAddr,
         socket: &SharedSocket,
-    ) -> impl Future<Item = Transport, Error = io::Error> {
+    ) -> impl Future<Item = TransportConnection, Error = io::Error> {
         let connector = self.ssl_connector();
         let state = self.clone();
         socket
@@ -322,7 +325,7 @@ impl NetworkState {
                 )
             })
             .and_then(move |stream| {
-                let conn = Transport::from_tls_stream(&state, stream, id);
+                let conn = TransportConnection::from_tls_stream(&state, stream, id);
                 conn.send_peer_info(state.my_peer_information());
                 state.add_connection(id, conn.clone());
                 Ok(conn)
@@ -383,7 +386,7 @@ impl NetworkState {
     pub fn get_connection(
         &self,
         host_id: Identifier,
-    ) -> impl Future<Item = Transport, Error = io::Error> {
+    ) -> impl Future<Item = TransportConnection, Error = io::Error> {
         let state = self.clone();
         self.read()
             .connections

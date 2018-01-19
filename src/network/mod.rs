@@ -8,5 +8,5 @@ pub mod protocol;
 
 use self::local_address::LocalAddress;
 pub use self::state::NetworkState;
-use self::transport::Transport;
-pub use self::io::{SharedSocket, Connection};
+use self::transport::Connection as TransportConnection;
+pub use self::io::{SharedSocket, Connection as IoConnection};

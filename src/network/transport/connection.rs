@@ -11,17 +11,17 @@ use network::protocol::{Message, PeerInfo};
 use Identifier;
 
 #[derive(Clone)]
-pub struct Transport {
+pub struct Connection {
     state: NetworkState,
     sink: Sender<Frame>,
 }
 
-impl Transport {
+impl Connection {
     pub fn from_tls_stream<S>(
         state: &NetworkState,
         stream: SslStream<S>,
         remote_id: Identifier,
-    ) -> Transport
+    ) -> Connection
     where
         S: AsyncRead + AsyncWrite + 'static,
     {
@@ -33,7 +33,7 @@ impl Transport {
             ))
             .map(|_| ());
         state.spawn(done);
-        let transport = Transport {
+        let transport = Connection {
             state: state.clone(),
             sink: sender,
         };
