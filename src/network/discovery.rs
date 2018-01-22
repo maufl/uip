@@ -2,9 +2,8 @@ use std::net::SocketAddr;
 use std::error::Error;
 use std::fmt::{self, Display};
 
-use futures::{Stream, IntoFuture, Future};
+use futures::Future;
 use futures::future::err;
-use futures::stream::iter_ok;
 use tokio_core::reactor::Handle;
 
 use igd::{PortMappingProtocol, SearchError, AddAnyPortError};
@@ -52,39 +51,30 @@ impl From<AddAnyPortError> for AddressDiscoveryError {
     }
 }
 
-pub fn discover_addresses()
-    -> impl Stream<Item = LocalAddress, Error = AddressDiscoveryError> + 'static
-{
-    Interface::get_all()
-        .map_err(|err| {
-            AddressDiscoveryError::InterfacesError(
-                format!("Error while fetching interfaces: {}", err).to_owned(),
-            )
+pub fn discover_addresses() -> Result<Vec<LocalAddress>, AddressDiscoveryError> {
+    let interfaces = Interface::get_all().map_err(|err| {
+        AddressDiscoveryError::InterfacesError(
+            format!("Error while fetching interfaces: {}", err).to_owned(),
+        )
+    })?;
+    let iter = interfaces
+        .into_iter()
+        .filter(|interface| {
+            !interface.is_loopback() && interface.flags.contains(IFF_RUNNING)
         })
-        .into_future()
-        .into_stream()
-        .map(|interfaces| {
-            iter_ok::<_, AddressDiscoveryError>(interfaces)
-                .filter_map(|interface| {
-                    if interface.is_loopback() || !interface.flags.contains(IFF_RUNNING) {
-                        return None;
+        .flat_map(move |interface| {
+            interface.addresses.clone().into_iter().filter_map(
+                move |address| {
+                    match address.addr {
+                        Some(addr) if address.kind == Kind::Ipv4 || address.kind == Kind::Ipv6 => {
+                            Some(LocalAddress::new(&interface.name, addr, None, None))
+                        }
+                        _ => None,
                     }
-                    let stream = iter_ok(interface.addresses.clone()).filter_map(
-                        move |address| {
-                            match address.addr {
-                                Some(addr)
-                                    if address.kind == Kind::Ipv4 || address.kind == Kind::Ipv6 => {
-                                    Some(LocalAddress::new(&interface.name, addr, None))
-                                }
-                                _ => None,
-                            }
-                        },
-                    );
-                    Some(stream)
-                })
-                .flatten()
-        })
-        .flatten()
+                },
+            )
+        });
+    Ok(iter.collect())
 }
 
 pub fn request_external_address(
@@ -114,6 +104,7 @@ pub fn request_external_address(
             LocalAddress::new(
                 address.interface,
                 SocketAddr::V4(internal),
+                None,
                 Some(SocketAddr::V4(external)),
             )
         })

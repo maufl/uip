@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::cell::{RefCell, Ref, RefMut};
 use futures::{Future, IntoFuture, Poll, Async, future, Stream, Sink};
-use futures::stream::iter_ok;
 use futures::sync::mpsc::Sender;
 use tokio_core::reactor::Handle;
 use tokio_io::{AsyncRead, AsyncWrite};
@@ -20,7 +19,7 @@ use std::error::Error;
 use data::{Peer, PeerInformationBase};
 use {Identity, Identifier};
 use network::{TransportConnection, LocalAddress, SharedSocket};
-use network::discovery::{discover_addresses, request_external_address, AddressDiscoveryError};
+use network::discovery::discover_addresses;
 use network::change::Listener;
 use network::protocol::Message;
 
@@ -70,59 +69,46 @@ impl NetworkState {
         self.read().handle.spawn(f)
     }
 
-    fn open_sockets(&self) {
-        let state = self.clone();
-        let state2 = self.clone();
-        let state3 = self.clone();
-        let state4 = self.clone();
+    fn open_new_sockets(&self) {
+        let mut addresses = match discover_addresses() {
+            Ok(a) => a,
+            Err(err) => return warn!("Error enumerating network interfaces: {}", err),
+        };
         let port = self.read().port;
-        let task = discover_addresses()
-            .map_err(|err| warn!("Unable to enumerate local addresses: {}", err))
-            .map(move |mut addr| {
-                addr.internal.set_port(port);
-                addr
-            })
-            .collect()
-            .and_then(move |addresses| {
-                let stale: Vec<LocalAddress> = state
-                    .read()
-                    .sockets
-                    .keys()
-                    .filter(|address| !addresses.contains(address))
-                    .cloned()
-                    .collect();
-                for address in stale {
-                    info!("Closing stale socket {}", address.internal);
-                    if let Some(_socket) = state.write().sockets.remove(&address) {
-                        info!("Closed socket {}", address.internal);
-                    } else {
-                        info!("No socket found for {}", address.internal);
-                    };
-                }
-                iter_ok(addresses)
-                    .filter(move |address| !state.read().sockets.contains_key(address))
-                    .filter(|address| match address.internal.ip() {
-                        IpAddr::V4(_) => true,
-                        IpAddr::V6(v6) => v6.is_global(),
-                    })
-                    .and_then(move |address| {
-                        request_external_address(address, &state2.read().handle)
-                            .or_else(move |err| {
-                                match err {
-                                    AddressDiscoveryError::UnsupportedAddress(_) => {}
-                                    _ => warn!("Error while requesting external address: {}", err),
-                                };
-                                Ok(address)
-                            })
-                    })
-                    .for_each(move |address| {
-                        state3.open_socket(address).map_err(|err| {
-                            warn!("Error while opening socket: {}", err)
-                        })
-                    })
-            })
-            .map(move |_| state4.publish_addresses());
-        self.spawn(task);
+        addresses.iter_mut().for_each(|address| {
+            address.internal.set_port(port)
+        });
+        self.close_stale_sockets(&addresses);
+        let new_addresses = addresses
+            .iter()
+            .filter(|address| !self.read().sockets.contains_key(address))
+            .filter(|address| match address.internal.ip() {
+                IpAddr::V4(_) => true,
+                IpAddr::V6(v6) => v6.is_global(),
+            });
+        for address in new_addresses {
+            let _ = self.open_socket(*address).map_err(|err| {
+                warn!("Error while opening socket: {}", err)
+            });
+        }
+        self.publish_addresses();
+    }
+
+    fn close_stale_sockets(&self, current_addresses: &Vec<LocalAddress>) {
+        let stale: Vec<LocalAddress> = self.read()
+            .sockets
+            .keys()
+            .filter(|address| !current_addresses.contains(address))
+            .cloned()
+            .collect();
+        for address in stale {
+            info!("Closing stale socket {}", address.internal);
+            if let Some(_socket) = self.write().sockets.remove(&address) {
+                info!("Closed socket {}", address.internal);
+            } else {
+                info!("No socket found for {}", address.internal);
+            };
+        }
     }
 
     fn external_addresses(&self) -> Vec<SocketAddr> {
@@ -171,7 +157,7 @@ impl NetworkState {
             .debounce(Duration::from_millis(2000))
             .for_each(move |_| {
                 info!("Network changed");
-                state.open_sockets();
+                state.open_new_sockets();
                 Ok(())
             })
             .map_err(|err| {
@@ -404,7 +390,7 @@ impl Future for NetworkState {
     type Error = ();
 
     fn poll(&mut self) -> Poll<(), ()> {
-        self.open_sockets();
+        self.open_new_sockets();
         self.observe_network_changes();
         Ok(Async::NotReady)
     }

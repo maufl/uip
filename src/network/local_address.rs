@@ -32,6 +32,7 @@ impl InterfaceName {
 pub struct LocalAddress {
     pub interface: InterfaceName,
     pub internal: SocketAddr,
+    pub gateway: Option<SocketAddr>,
     pub external: Option<SocketAddr>,
 }
 
@@ -39,11 +40,13 @@ impl LocalAddress {
     pub fn new<S: AsRef<[u8]>>(
         interface: S,
         internal: SocketAddr,
+        gateway: Option<SocketAddr>,
         external: Option<SocketAddr>,
     ) -> LocalAddress {
         LocalAddress {
             interface: InterfaceName::copy_from_slice(interface.as_ref()),
             internal: internal,
+            gateway: gateway,
             external: external,
         }
     }
