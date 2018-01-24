@@ -107,7 +107,7 @@ impl SharedSocket {
         Ok(Connection::new(source, addr, self.clone()))
     }
 
-    pub fn forward_or_new_connection(&self, buf: &[u8], remote: SocketAddr) -> Option<Connection> {
+    fn forward_or_new_connection(&self, buf: &[u8], remote: SocketAddr) -> Option<Connection> {
         let mut socket = self.write();
         if let Some(destination) = socket.connections.get(&remote) {
             let task = destination.clone().send(buf.into()).map(|_| ()).map_err(

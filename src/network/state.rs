@@ -18,7 +18,9 @@ use std::error::Error;
 
 use data::{Peer, PeerInformationBase};
 use {Identity, Identifier};
-use network::{TransportConnection, LocalAddress, SharedSocket};
+use network::LocalAddress;
+use network::transport::Connection as TransportConnection;
+use network::io::SharedSocket;
 use network::discovery::discover_addresses;
 use network::change::Listener;
 use network::protocol::Message;
@@ -235,6 +237,7 @@ impl NetworkState {
     where
         S: AsyncRead + AsyncWrite + 'static,
     {
+        let state = self.clone();
         let id = {
             let session = connection.get_ref().ssl();
             let x509 = session.peer_certificate().ok_or(
@@ -244,7 +247,12 @@ impl NetworkState {
                 format!("Unable to generate identifier from certificate: {}", err)
             })?
         };
-        let transport = TransportConnection::from_tls_stream(self, connection, id);
+        let transport = TransportConnection::from_tls_stream(
+            connection,
+            id,
+            self.read().handle.clone(),
+            move |id, channel, data| state.deliver_frame(id, channel, data),
+        );
         self.add_connection(id, transport);
         Ok(())
     }
@@ -311,7 +319,13 @@ impl NetworkState {
                 )
             })
             .and_then(move |stream| {
-                let conn = TransportConnection::from_tls_stream(&state, stream, id);
+                let state2 = state.clone();
+                let conn = TransportConnection::from_tls_stream(
+                    stream,
+                    id,
+                    state.read().handle.clone(),
+                    move |id, channel, data| state2.deliver_frame(id, channel, data),
+                );
                 conn.send_peer_info(state.my_peer_information());
                 state.add_connection(id, conn.clone());
                 Ok(conn)

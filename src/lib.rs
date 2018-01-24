@@ -1,5 +1,6 @@
 #![feature(conservative_impl_trait)]
 #![feature(ip)]
+#![feature(nll)]
 
 extern crate interfaces;
 extern crate igd;

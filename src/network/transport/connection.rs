@@ -1,4 +1,5 @@
 use tokio_io::{AsyncRead, AsyncWrite};
+use tokio_core::reactor::Handle;
 use futures::{Stream, Sink, Future};
 use futures::sync::mpsc::{Sender, SendError, channel};
 use tokio_openssl::SslStream;
@@ -12,46 +13,44 @@ use Identifier;
 
 #[derive(Clone)]
 pub struct Connection {
-    state: NetworkState,
+    handle: Handle,
     sink: Sender<Frame>,
 }
 
 impl Connection {
-    pub fn from_tls_stream<S>(
-        state: &NetworkState,
+    pub fn from_tls_stream<S, F>(
         stream: SslStream<S>,
         remote_id: Identifier,
+        handle: Handle,
+        callback: F,
     ) -> Connection
     where
         S: AsyncRead + AsyncWrite + 'static,
+        F: Fn(Identifier, u16, BytesMut) + 'static,
     {
         let (sink, stream) = stream.framed(Codec()).split();
         let (sender, receiver) = channel::<Frame>(10);
-        let done = receiver
+        let task = receiver
             .forward(sink.sink_map_err(
                 |err| println!("Unexpected sink error: {}", err),
             ))
             .map(|_| ());
-        state.spawn(done);
-        let transport = Connection {
-            state: state.clone(),
-            sink: sender,
-        };
-        let transport2 = transport.clone();
-        let done = stream
+        handle.spawn(task);
+        let task = stream
             .for_each(move |frame| {
                 match frame {
                     Frame::Ping => println!("Ping"),
                     Frame::Pong => println!("Pong"),
-                    Frame::Data(channel_id, data) => {
-                        transport2.state.deliver_frame(remote_id, channel_id, data)
-                    }
+                    Frame::Data(channel_id, data) => callback(remote_id, channel_id, data),
                 };
                 Ok(())
             })
             .map_err(|err| println!("Error while receiving frame: {}", err));
-        state.spawn(done);
-        transport
+        handle.spawn(task);
+        Connection {
+            handle: handle,
+            sink: sender,
+        }
     }
 
     pub fn send_frame(
@@ -78,6 +77,6 @@ impl Connection {
         let task = self.send_frame(0, buf).map(|_| {}).map_err(|err| {
             warn!("Unable to send peer information: {}", err)
         });
-        self.state.spawn(task);
+        self.handle.spawn(task);
     }
 }
