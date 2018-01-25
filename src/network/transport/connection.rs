@@ -5,7 +5,6 @@ use futures::sync::mpsc::{Sender, SendError, channel};
 use tokio_openssl::SslStream;
 use bytes::BytesMut;
 
-use network::NetworkState;
 use super::codec::{Codec, Frame};
 use data::Peer;
 use network::protocol::{Message, PeerInfo};

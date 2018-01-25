@@ -14,9 +14,9 @@ use tokio_core::reactor::Handle;
 use tokio_io::{AsyncRead, AsyncWrite};
 use tokio_openssl::{SslStream, SslConnectorExt, SslAcceptorExt};
 
-use network::io::{Connection as IoConnection, SharedSocket};
+use network::io::SharedSocket;
 use network::{LocalAddress, NetworkState};
-use network::transport::Connection as TransportConnection;
+use network::transport::Connection;
 use {Identity, Identifier};
 
 pub struct Inner {
@@ -24,7 +24,7 @@ pub struct Inner {
     address: LocalAddress,
     socket: SharedSocket,
     handle: Handle,
-    pub connections: HashMap<Identifier, TransportConnection>,
+    pub connections: HashMap<Identifier, Connection>,
     state: NetworkState,
 }
 
@@ -50,7 +50,7 @@ impl Socket {
     }
     pub fn open(
         address: LocalAddress,
-        handle: Handle,
+        handle: &Handle,
         id: Identity,
         state: NetworkState,
     ) -> io::Result<Socket> {
@@ -74,7 +74,7 @@ impl Socket {
                 .map_err(|err| err.description().to_string())
                 .and_then(move |connection| {
                     let id = id_from_connection(&connection)?;
-                    let conn = TransportConnection::from_tls_stream(
+                    let conn = Connection::from_tls_stream(
                         connection,
                         id,
                         handle2,
@@ -97,7 +97,7 @@ impl Socket {
         self.0.borrow_mut()
     }
 
-    pub fn get_connection(&self, identifier: &Identifier) -> Option<TransportConnection> {
+    pub fn get_connection(&self, identifier: &Identifier) -> Option<Connection> {
         self.read().connections.get(identifier).cloned()
     }
 
@@ -105,10 +105,9 @@ impl Socket {
         &self,
         identifier: Identifier,
         address: SocketAddr,
-    ) -> impl Future<Item = TransportConnection, Error = io::Error> {
+    ) -> impl Future<Item = Connection, Error = io::Error> {
         let id = &self.read().id;
-        let identifier = id.identifier;
-        let connector = connector_for_id(&id);
+        let connector = connector_for_id(id);
         let state = self.read().state.clone();
         let handle = self.read().handle.clone();
         self.read()
@@ -124,7 +123,7 @@ impl Socket {
             })
             .and_then(move |stream| {
                 let state2 = state.clone();
-                let conn = TransportConnection::from_tls_stream(
+                let conn = Connection::from_tls_stream(
                     stream,
                     identifier,
                     handle,
@@ -143,7 +142,7 @@ impl Socket {
         if internal.ip().is_global() {
             return Some(internal);
         }
-        return None;
+        None
     }
 }
 

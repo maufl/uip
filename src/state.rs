@@ -62,7 +62,8 @@ impl State {
         let state2 = state.clone();
         let task = source
             .for_each(move |(host_id, channel_id, data)| {
-                Ok(state2.deliver_frame(host_id, channel_id, data))
+                state2.deliver_frame(host_id, channel_id, data);
+                Ok(())
             })
             .map_err(|_| error!("Failed to receive frames from network layer"));
         handle.spawn(task);
@@ -88,7 +89,8 @@ impl State {
         let state2 = state.clone();
         let task = source
             .for_each(move |(host_id, channel_id, data)| {
-                Ok(state2.deliver_frame(host_id, channel_id, data))
+                state2.deliver_frame(host_id, channel_id, data);
+                Ok(())
             })
             .map_err(|_| error!("Failed to receive frames from network layer"));
         handle.spawn(task);

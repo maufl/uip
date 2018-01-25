@@ -6,15 +6,8 @@ use std::cell::{RefCell, Ref, RefMut};
 use futures::{Future, IntoFuture, Poll, Async, future, Stream, Sink};
 use futures::sync::mpsc::Sender;
 use tokio_core::reactor::Handle;
-use tokio_io::{AsyncRead, AsyncWrite};
 use bytes::BytesMut;
-use openssl::x509::X509;
-use openssl::ssl::{SslConnectorBuilder, SslConnector, SslAcceptorBuilder, SslMethod,
-                   SslVerifyMode, SSL_VERIFY_PEER};
-use openssl::stack::Stack;
-use tokio_openssl::{SslStream, SslConnectorExt, SslAcceptorExt};
 use std::io;
-use std::error::Error;
 
 use data::{Peer, PeerInformationBase};
 use {Identity, Identifier};
@@ -95,7 +88,7 @@ impl NetworkState {
         self.publish_addresses();
     }
 
-    fn close_stale_sockets(&self, current_addresses: &Vec<LocalAddress>) {
+    fn close_stale_sockets(&self, current_addresses: &[LocalAddress]) {
         let stale: Vec<SocketAddr> = self.read()
             .sockets
             .keys()
@@ -147,7 +140,7 @@ impl NetworkState {
         debug!("Opening new socket on address {:?}", address);
         let socket = Socket::open(
             address,
-            self.read().handle.clone(),
+            &self.read().handle,
             self.read().id.clone(),
             self.clone(),
         )?;
@@ -220,7 +213,6 @@ impl NetworkState {
         remote_id: Identifier,
         address: SocketAddr,
     ) -> impl Future<Item = TransportConnection, Error = io::Error> {
-        let state = self.clone();
         self.read()
             .sockets
             .values()
