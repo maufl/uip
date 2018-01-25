@@ -19,8 +19,7 @@ use std::error::Error;
 use data::{Peer, PeerInformationBase};
 use {Identity, Identifier};
 use network::LocalAddress;
-use network::transport::Connection as TransportConnection;
-use network::io::SharedSocket;
+use network::transport::{Connection as TransportConnection, Socket};
 use network::discovery::discover_addresses;
 use network::change::Listener;
 use network::protocol::Message;
@@ -28,12 +27,11 @@ use network::protocol::Message;
 pub struct InnerState {
     pub id: Identity,
     pub pib: PeerInformationBase,
-    connections: HashMap<Identifier, Vec<TransportConnection>>,
     pub relays: Vec<Identifier>,
     pub port: u16,
     handle: Handle,
     upstream: Sender<(Identifier, u16, BytesMut)>,
-    sockets: HashMap<LocalAddress, SharedSocket>,
+    sockets: HashMap<SocketAddr, Socket>,
 }
 
 #[derive(Clone)]
@@ -51,7 +49,6 @@ impl NetworkState {
         NetworkState(Rc::new(RefCell::new(InnerState {
             id: id,
             pib: pib,
-            connections: HashMap::new(),
             relays: relays,
             port: port,
             handle: handle,
@@ -83,7 +80,9 @@ impl NetworkState {
         self.close_stale_sockets(&addresses);
         let new_addresses = addresses
             .iter()
-            .filter(|address| !self.read().sockets.contains_key(address))
+            .filter(|address| {
+                !self.read().sockets.contains_key(&address.internal)
+            })
             .filter(|address| match address.internal.ip() {
                 IpAddr::V4(_) => true,
                 IpAddr::V6(v6) => v6.is_global(),
@@ -97,18 +96,24 @@ impl NetworkState {
     }
 
     fn close_stale_sockets(&self, current_addresses: &Vec<LocalAddress>) {
-        let stale: Vec<LocalAddress> = self.read()
+        let stale: Vec<SocketAddr> = self.read()
             .sockets
             .keys()
-            .filter(|address| !current_addresses.contains(address))
+            .filter(|address| {
+                current_addresses.iter().map(|addr| addr.internal).any(
+                    |addr| {
+                        &addr == *address
+                    },
+                )
+            })
             .cloned()
             .collect();
         for address in stale {
-            info!("Closing stale socket {}", address.internal);
+            info!("Closing stale socket {}", address);
             if let Some(_socket) = self.write().sockets.remove(&address) {
-                info!("Closed socket {}", address.internal);
+                info!("Closed socket {}", address);
             } else {
-                info!("No socket found for {}", address.internal);
+                info!("No socket found for {}", address);
             };
         }
     }
@@ -117,7 +122,7 @@ impl NetworkState {
         self.read()
             .sockets
             .iter()
-            .filter_map(|(local_address, _socket)| local_address.external)
+            .filter_map(|(_addr, socket)| socket.public_address())
             .collect()
     }
 
@@ -131,21 +136,26 @@ impl NetworkState {
 
     fn publish_addresses(&self) {
         let peer_information = self.my_peer_information();
-        for connections in self.read().connections.values() {
-            for connection in connections.iter() {
+        for socket in self.read().sockets.values() {
+            for connection in socket.read().connections.values() {
                 connection.send_peer_info(peer_information.clone());
             }
         }
     }
 
     fn open_socket(&self, address: LocalAddress) -> io::Result<()> {
-        let mut addr: SocketAddr = address.internal;
-        addr.set_port(self.read().port);
-        debug!("Opening new socket on address {}", addr);
-        let socket = SharedSocket::bind(address, self.read().handle.clone())?;
-        self.write().sockets.insert(address, socket.clone());
+        debug!("Opening new socket on address {:?}", address);
+        let socket = Socket::open(
+            address,
+            self.read().handle.clone(),
+            self.read().id.clone(),
+            self.clone(),
+        )?;
+        self.write().sockets.insert(
+            address.internal,
+            socket.clone(),
+        );
         self.connect_to_relays(&socket);
-        self.listen(&socket);
         Ok(())
     }
 
@@ -172,7 +182,7 @@ impl NetworkState {
         self.write().relays.push(id);
     }
 
-    pub fn connect_to_relays(&self, socket: &SharedSocket) {
+    pub fn connect_to_relays(&self, socket: &Socket) {
         for relay in &self.read().relays {
             let addr = match self.read().pib.lookup_peer_address(relay) {
                 Some(info) => info,
@@ -180,89 +190,14 @@ impl NetworkState {
             };
             println!("Connecting to relay {}", relay);
             let relay = *relay;
-            let future = self.open_transport(relay, addr, socket)
+            let future = socket
+                .open_connection(relay, addr)
                 .and_then(|_| future::ok(()))
                 .map_err(move |err| {
                     println!("Unable to connect to peer {}: {}", relay, err)
                 });
             self.spawn(future);
         }
-    }
-
-    fn listen(&self, listener: &SharedSocket) {
-        let state = self.clone();
-        let acceptor = {
-            let id = &self.read().id;
-            let empty_chain: Stack<X509> = Stack::new().expect("unable to build empty cert chain");
-            let mut builder = SslAcceptorBuilder::mozilla_modern(
-                SslMethod::dtls(),
-                &id.key,
-                id.cert.as_ref(),
-                empty_chain.as_ref(),
-            ).expect("Unable to build new SSL acceptor");
-            builder.set_verify_callback(SSL_VERIFY_PEER, |_valid, context| {
-                context.current_cert().is_some()
-            });
-            builder.build()
-        };
-        let local_addr = listener.local_addr().expect("Not bound to a local address");
-        self.write().port = local_addr.port();
-        let task = listener
-            .incoming()
-            .for_each(move |stream| {
-                debug!(
-                    "Accepting new UDP connection from: {}",
-                    stream.local_addr().expect("Impossible")
-                );
-                let state2 = state.clone();
-                acceptor
-                    .accept_async(stream)
-                    .map_err(|err| err.description().to_string())
-                    .and_then(move |connection| state2.accept_connection(connection))
-                    .then(|result| {
-                        if let Err(err) = result {
-                            println!("Error while accepting a new TLS connection: {}", err)
-                        }
-                        Ok(())
-                    })
-            })
-            .map(move |_| info!("UDP socket on {} was closed", local_addr))
-            .map_err(move |_err| {
-                info!("DTLS listener on {} died unexpectedly", local_addr)
-            });
-        self.spawn(task);
-    }
-
-    fn accept_connection<S>(&self, connection: SslStream<S>) -> Result<(), String>
-    where
-        S: AsyncRead + AsyncWrite + 'static,
-    {
-        let state = self.clone();
-        let id = {
-            let session = connection.get_ref().ssl();
-            let x509 = session.peer_certificate().ok_or(
-                "Client did not provide a certificate",
-            )?;
-            Identifier::from_x509_certificate(&x509).map_err(|err| {
-                format!("Unable to generate identifier from certificate: {}", err)
-            })?
-        };
-        let transport = TransportConnection::from_tls_stream(
-            connection,
-            id,
-            self.read().handle.clone(),
-            move |id, channel, data| state.deliver_frame(id, channel, data),
-        );
-        self.add_connection(id, transport);
-        Ok(())
-    }
-
-    fn add_connection(&self, id: Identifier, conn: TransportConnection) {
-        self.write()
-            .connections
-            .entry(id)
-            .or_insert_with(Vec::new)
-            .push(conn);
     }
 
     fn connect(
@@ -295,54 +230,7 @@ impl NetworkState {
                 io::Error::new(io::ErrorKind::NotConnected, "No socket is currently open")
             })
             .into_future()
-            .and_then(move |socket| {
-                state.open_transport(remote_id, address, &socket)
-            })
-    }
-
-    fn open_transport(
-        &self,
-        id: Identifier,
-        addr: SocketAddr,
-        socket: &SharedSocket,
-    ) -> impl Future<Item = TransportConnection, Error = io::Error> {
-        let connector = self.ssl_connector();
-        let state = self.clone();
-        socket
-            .connect(addr)
-            .into_future()
-            .and_then(move |stream| {
-                connector.connect_async(&id.to_string(), stream).map_err(
-                    |err| {
-                        io::Error::new(io::ErrorKind::Other, format!("Handshake error: {:?}", err))
-                    },
-                )
-            })
-            .and_then(move |stream| {
-                let state2 = state.clone();
-                let conn = TransportConnection::from_tls_stream(
-                    stream,
-                    id,
-                    state.read().handle.clone(),
-                    move |id, channel, data| state2.deliver_frame(id, channel, data),
-                );
-                conn.send_peer_info(state.my_peer_information());
-                state.add_connection(id, conn.clone());
-                Ok(conn)
-            })
-    }
-
-    fn ssl_connector(&self) -> SslConnector {
-        let mut builder =
-            SslConnectorBuilder::new(SslMethod::dtls()).expect("Unable to build new SSL connector");
-        builder.set_verify(SslVerifyMode::empty());
-        builder.set_certificate(&self.read().id.cert).expect(
-            "Unable to get reference to client certificate",
-        );
-        builder.set_private_key(&self.read().id.key).expect(
-            "Unable to get a reference to the client key",
-        );
-        builder.build()
+            .and_then(move |socket| socket.open_connection(remote_id, address))
     }
 
     pub fn deliver_frame(&self, host_id: Identifier, channel_id: u16, data: BytesMut) {
@@ -388,14 +276,14 @@ impl NetworkState {
         host_id: Identifier,
     ) -> impl Future<Item = TransportConnection, Error = io::Error> {
         let state = self.clone();
-        self.read()
-            .connections
-            .get(&host_id)
-            .and_then(|cs| cs.first())
-            .cloned()
-            .ok_or(())
-            .into_future()
-            .or_else(move |_| state.connect(host_id))
+        let connection = self.read()
+            .sockets
+            .values()
+            .filter_map(|socket| socket.get_connection(&host_id))
+            .next();
+        connection.ok_or(()).into_future().or_else(move |_| {
+            state.connect(host_id)
+        })
     }
 }
 

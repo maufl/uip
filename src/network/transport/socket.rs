@@ -19,11 +19,12 @@ use network::{LocalAddress, NetworkState};
 use network::transport::Connection as TransportConnection;
 use {Identity, Identifier};
 
-struct Inner {
+pub struct Inner {
     id: Identity,
+    address: LocalAddress,
     socket: SharedSocket,
     handle: Handle,
-    connections: HashMap<Identifier, TransportConnection>,
+    pub connections: HashMap<Identifier, TransportConnection>,
     state: NetworkState,
 }
 
@@ -31,9 +32,16 @@ struct Inner {
 pub struct Socket(Rc<RefCell<Inner>>);
 
 impl Socket {
-    fn new(socket: SharedSocket, handle: Handle, state: NetworkState, id: Identity) -> Socket {
+    fn new(
+        socket: SharedSocket,
+        address: LocalAddress,
+        handle: Handle,
+        state: NetworkState,
+        id: Identity,
+    ) -> Socket {
         Socket(Rc::new(RefCell::new(Inner {
             id: id,
+            address: address,
             socket: socket,
             handle: handle,
             state: state,
@@ -48,7 +56,13 @@ impl Socket {
     ) -> io::Result<Socket> {
         let shared_socket = SharedSocket::bind(address, handle.clone())?;
         let acceptor = acceptor_for_id(&id);
-        let socket = Self::new(shared_socket.clone(), handle.clone(), state.clone(), id);
+        let socket = Self::new(
+            shared_socket.clone(),
+            address,
+            handle.clone(),
+            state.clone(),
+            id,
+        );
         let socket2 = socket.clone();
         let handle2 = handle.clone();
         let task = shared_socket.incoming().for_each(move |stream| {
@@ -75,7 +89,7 @@ impl Socket {
         Ok(socket)
     }
 
-    fn read(&self) -> Ref<Inner> {
+    pub fn read(&self) -> Ref<Inner> {
         self.0.borrow()
     }
 
@@ -83,11 +97,11 @@ impl Socket {
         self.0.borrow_mut()
     }
 
-    fn get_connection(&self, identifier: &Identifier) -> Option<TransportConnection> {
+    pub fn get_connection(&self, identifier: &Identifier) -> Option<TransportConnection> {
         self.read().connections.get(identifier).cloned()
     }
 
-    fn open_connection(
+    pub fn open_connection(
         &self,
         identifier: Identifier,
         address: SocketAddr,
@@ -118,6 +132,18 @@ impl Socket {
                 );
                 Ok(conn)
             })
+    }
+
+    pub fn public_address(&self) -> Option<SocketAddr> {
+        let address = self.read().address;
+        if let Some(addr) = address.external {
+            return Some(addr);
+        }
+        let internal = address.internal;
+        if internal.ip().is_global() {
+            return Some(internal);
+        }
+        return None;
     }
 }
 
