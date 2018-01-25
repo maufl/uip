@@ -3,11 +3,12 @@ use rmp_serde::{Deserializer, Serializer};
 use rmp_serde::encode::Error as EncodeError;
 use bytes::{BytesMut, Bytes, BufMut};
 
-use data::Peer;
+use data::{Peer, Identifier};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Message {
     PeerInfo(PeerInfo),
+    PeerInfoRequest(Identifier),
     Invalid(Vec<u8>),
 }
 

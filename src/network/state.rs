@@ -258,16 +258,55 @@ impl NetworkState {
                     "Received new peer information from {}: {:?}",
                     host_id,
                     peer_info
-                )
+                );
+                if host_id == peer_info.peer.id {
+                    self.write().pib.add_peer(peer_info.peer.id, peer_info.peer)
+                }
+            }
+            Message::PeerInfoRequest(identifier) => {
+                let peer = match self.read().pib.get_peer(&identifier) {
+                    Some(peer) => peer.clone(),
+                    None => return,
+                };
+                let task = self.get_connection(host_id)
+                    .and_then(move |conn| {
+                        conn.send_peer_info(peer);
+                        Ok(())
+                    })
+                    .map_err(|err| {
+                        warn!("Unable to respond with peer information: {}", err)
+                    });
+                self.spawn(task);
             }
             Message::Invalid(_) => warn!("Received invalid control message from peer {}", host_id),
         }
     }
 
+    pub fn request_peer_info(&self, id: Identifier) {
+        let relay = match self.read().pib.get_peer(&id).and_then(|p| p.relays.first()) {
+            Some(id) => *id,
+            None => return,
+        };
+        let task = self.get_connection(relay)
+            .and_then(move |conn| {
+                conn.send_peer_info_request(&id);
+                Ok(())
+            })
+            .map_err(move |err| {
+                warn!(
+                    "Unable to request peer information for {} from relay {}: {}",
+                    id,
+                    relay,
+                    err
+                )
+            });
+        self.spawn(task);
+    }
+
     pub fn send_frame(&self, host_id: Identifier, channel_id: u16, data: BytesMut) {
         let task = self.get_connection(host_id)
             .and_then(move |connection| {
-                connection.send_frame(channel_id, data).map_err(|_| {
+                connection.send_data_frame(channel_id, data).map_err(|_| {
                     io::Error::new(io::ErrorKind::BrokenPipe, "unable to forward frame")
                 })
             })

@@ -52,7 +52,14 @@ impl Connection {
         }
     }
 
-    pub fn send_frame(
+    pub fn send_frame(&self, f: Frame) {
+        let task = self.sink.clone().send(f).map(|_| ()).map_err(|err| {
+            warn!("Error sending frame: {}", err)
+        });
+        self.handle.spawn(task);
+    }
+
+    pub fn send_data_frame(
         &self,
         channel_id: u16,
         data: BytesMut,
@@ -61,10 +68,9 @@ impl Connection {
         self.sink.clone().send(Frame::Data(channel_id, data))
     }
 
-    pub fn send_peer_info(&self, peer: Peer) {
-        let peer_info = Message::PeerInfo(PeerInfo { peer: peer });
+    pub fn send_control_message(&self, msg: Message) {
         let buf = BytesMut::with_capacity(1500);
-        let buf = match peer_info.serialize_to_msgpck(buf) {
+        let buf = match msg.serialize_to_msgpck(buf) {
             Err(err) => {
                 return warn!(
                     "Failed to send peer information because serialization failed: {}",
@@ -73,9 +79,19 @@ impl Connection {
             }
             Ok(buf) => buf,
         };
-        let task = self.send_frame(0, buf).map(|_| {}).map_err(|err| {
+        let task = self.send_data_frame(0, buf).map(|_| {}).map_err(|err| {
             warn!("Unable to send peer information: {}", err)
         });
         self.handle.spawn(task);
+    }
+
+    pub fn send_peer_info_request(&self, peer_id: &Identifier) {
+        let peer_info_request = Message::PeerInfoRequest(*peer_id);
+        self.send_control_message(peer_info_request);
+    }
+
+    pub fn send_peer_info(&self, peer: Peer) {
+        let peer_info = Message::PeerInfo(PeerInfo { peer: peer });
+        self.send_control_message(peer_info);
     }
 }
