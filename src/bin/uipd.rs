@@ -40,10 +40,13 @@ fn main() {
     if !Path::new(&config_file_path).is_file() {
         return error!("Configuration file {} does not exist", config_file_path);
     };
-    let config = match read_configuration(config_file_path.to_string()) {
+    let mut config = match read_configuration(config_file_path.to_string()) {
         Ok(c) => c,
         Err(err) => return error!("{}", err),
     };
+    if config.port == 0u16 {
+        config.port = 0xfe11;
+    }
     let state = State::from_configuration(config, &core.handle());
 
     println!("Starting client for ID {}", state.read().id.identifier);

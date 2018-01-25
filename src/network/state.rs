@@ -3,7 +3,7 @@ use std::time::Duration;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::cell::{RefCell, Ref, RefMut};
-use futures::{Future, IntoFuture, Poll, Async, future, Stream, Sink};
+use futures::{Future, IntoFuture, Poll, Async, Stream, Sink};
 use futures::sync::mpsc::Sender;
 use tokio_core::reactor::Handle;
 use bytes::BytesMut;
@@ -148,7 +148,7 @@ impl NetworkState {
             address.internal,
             socket.clone(),
         );
-        self.connect_to_relays(&socket);
+        self.connect_to_relays_on_socket(&socket);
         Ok(())
     }
 
@@ -175,17 +175,30 @@ impl NetworkState {
         self.write().relays.push(id);
     }
 
-    pub fn connect_to_relays(&self, socket: &Socket) {
+    pub fn connect_to_relays(&self) {
+        for socket in self.read().sockets.values() {
+            self.connect_to_relays_on_socket(socket)
+        }
+    }
+
+    pub fn connect_to_relays_on_socket(&self, socket: &Socket) {
         for relay in &self.read().relays {
+            if socket.get_connection(relay).is_some() {
+                continue;
+            };
             let addr = match self.read().pib.lookup_peer_address(relay) {
                 Some(info) => info,
                 None => continue,
             };
             println!("Connecting to relay {}", relay);
             let relay = *relay;
+            let state = self.clone();
             let future = socket
                 .open_connection(relay, addr)
-                .and_then(|_| future::ok(()))
+                .and_then(move |conn| {
+                    conn.send_peer_info(state.my_peer_information());
+                    Ok(())
+                })
                 .map_err(move |err| {
                     println!("Unable to connect to peer {}: {}", relay, err)
                 });
