@@ -1,4 +1,4 @@
-use interfaces::{Interface, Kind};
+use interfaces::{Interface, Kind, NextHop};
 use interfaces::flags::IFF_RUNNING;
 
 use network::LocalAddress;
@@ -20,7 +20,11 @@ pub fn discover_addresses() -> Result<Vec<LocalAddress>, AddressDiscoveryError> 
                 move |address| {
                     match address.addr {
                         Some(addr) if address.kind == Kind::Ipv4 || address.kind == Kind::Ipv6 => {
-                            Some(LocalAddress::new(&interface.name, addr, None, None))
+                            let gateway = match address.hop {
+                                Some(NextHop::Destination(addr)) => Some(addr),
+                                _ => None,
+                            };
+                            Some(LocalAddress::new(&interface.name, addr, gateway, None))
                         }
                         _ => None,
                     }
