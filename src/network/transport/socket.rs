@@ -18,6 +18,7 @@ use network::io::SharedSocket;
 use network::{LocalAddress, NetworkState};
 use network::transport::Connection;
 use {Identity, Identifier};
+use network::discovery::request_external_address;
 
 pub struct Inner {
     id: Identity,
@@ -55,7 +56,6 @@ impl Socket {
         state: NetworkState,
     ) -> io::Result<Socket> {
         let shared_socket = SharedSocket::bind(address, handle.clone())?;
-        let acceptor = acceptor_for_id(&id);
         let socket = Self::new(
             shared_socket.clone(),
             address,
@@ -63,29 +63,8 @@ impl Socket {
             state.clone(),
             id,
         );
-        let socket2 = socket.clone();
-        let handle2 = handle.clone();
-        let task = shared_socket.incoming().for_each(move |stream| {
-            let socket2 = socket2.clone();
-            let handle2 = handle2.clone();
-            let state = state.clone();
-            acceptor
-                .accept_async(stream)
-                .map_err(|err| err.description().to_string())
-                .and_then(move |connection| {
-                    let id = id_from_connection(&connection)?;
-                    let conn = Connection::from_tls_stream(
-                        connection,
-                        id,
-                        handle2,
-                        move |id, channel, data| state.deliver_frame(id, channel, data),
-                    );
-                    socket2.write().connections.insert(id, conn);
-                    Ok(())
-                })
-                .map_err(|err| warn!("Error while accepting connection: {}", err))
-        });
-        handle.spawn(task);
+        socket.listen();
+        socket.request_external_address();
         Ok(socket)
     }
 
@@ -99,6 +78,35 @@ impl Socket {
 
     pub fn get_connection(&self, identifier: &Identifier) -> Option<Connection> {
         self.read().connections.get(identifier).cloned()
+    }
+
+    fn listen(&self) {
+        let socket = self.clone();
+        let handle = self.read().handle.clone();
+        let network_state = self.read().state.clone();
+        let acceptor = acceptor_for_id(&self.read().id);
+        let task = self.read().socket.incoming().for_each(move |stream| {
+            let socket = socket.clone();
+            let handle = handle.clone();
+            let network_state = network_state.clone();
+            acceptor
+                .accept_async(stream)
+                .map_err(|err| err.description().to_string())
+                .and_then(move |connection| {
+                    let id = id_from_connection(&connection)?;
+                    let conn =
+                        Connection::from_tls_stream(
+                            connection,
+                            id,
+                            handle,
+                            move |id, channel, data| network_state.deliver_frame(id, channel, data),
+                        );
+                    socket.write().connections.insert(id, conn);
+                    Ok(())
+                })
+                .map_err(|err| warn!("Error while accepting connection: {}", err))
+        });
+        self.read().handle.spawn(task);
     }
 
     pub fn open_connection(
@@ -131,6 +139,20 @@ impl Socket {
                 );
                 Ok(conn)
             })
+    }
+
+    pub fn request_external_address(&self) {
+        let socket = self.clone();
+        let internal = match self.read().address.internal {
+            SocketAddr::V4(addr) => addr,
+            _ => return,
+        };
+        let task = request_external_address(internal, &self.read().handle)
+            .map(move |external| {
+                socket.write().address.external = Some(SocketAddr::V4(external))
+            })
+            .map_err(|err| warn!("Unable to request external address: {}", err));
+        self.read().handle.spawn(task);
     }
 
     pub fn public_address(&self) -> Option<SocketAddr> {

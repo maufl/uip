@@ -1,4 +1,4 @@
-use std::net::SocketAddr;
+use std::net::{SocketAddr, SocketAddrV4};
 use std::error::Error;
 use std::fmt::{self, Display};
 
@@ -78,43 +78,14 @@ pub fn discover_addresses() -> Result<Vec<LocalAddress>, AddressDiscoveryError> 
 }
 
 pub fn request_external_address(
-    address: LocalAddress,
+    internal: SocketAddrV4,
     handle: &Handle,
-) -> Box<Future<Item = LocalAddress, Error = AddressDiscoveryError> + 'static> {
-    let default_address = address;
-    let internal = match address.internal {
-        SocketAddr::V4(addr) => addr,
-        _ => {
-            return Box::new(err(AddressDiscoveryError::UnsupportedAddress(
-                format!(
-                    "Address {} is not supported for external address discovery",
-                    address.internal,
-                ).to_owned(),
-            )))
-        }
-    };
-    let future = search_gateway(handle)
+) -> impl Future<Item = SocketAddrV4, Error = AddressDiscoveryError> {
+    search_gateway(handle)
         .from_err::<AddressDiscoveryError>()
         .and_then(move |gateway| {
             gateway
                 .get_any_address(PortMappingProtocol::UDP, internal, 0, "UIP")
                 .from_err()
         })
-        .map(move |external| {
-            LocalAddress::new(
-                address.interface,
-                SocketAddr::V4(internal),
-                None,
-                Some(SocketAddr::V4(external)),
-            )
-        })
-        .or_else(move |err| {
-            info!(
-                "Unable to request external address on interface {}: {}",
-                default_address.interface,
-                err
-            );
-            Ok(default_address)
-        });
-    Box::new(future)
 }
