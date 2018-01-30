@@ -5,7 +5,7 @@ extern crate serde_json;
 extern crate async_readline;
 extern crate bytes;
 extern crate futures;
-extern crate env_logger;
+extern crate pretty_env_logger;
 
 extern crate uip;
 
@@ -24,7 +24,7 @@ use std::str::FromStr;
 use bytes::BytesMut;
 
 fn main() {
-    env_logger::init().unwrap();
+    pretty_env_logger::init();
 
     let mut core = Core::new().unwrap();
 
@@ -105,6 +105,17 @@ fn main() {
                     let data = args.next().expect("No data to send");
                     state2.send_frame(id, channel, BytesMut::from(data));
                 }
+            } else if command.starts_with("request peer-information") {
+                let mut args = command.split_whitespace();
+                if args.clone().count() < 3 {
+                    println!("peer id required")
+                } else {
+                    let peer_id = Identifier::from_str(args.nth(2).expect("Peer id required"))
+                        .expect("Invalid peer id");
+                    state2.write().network.request_peer_info(peer_id);
+                }
+            } else {
+                println!("Unrecognized command");
             }
             let mut v = vec![];
             let _ = write!(v, "\n> ");

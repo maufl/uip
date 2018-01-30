@@ -190,7 +190,7 @@ impl NetworkState {
                 Some(info) => info,
                 None => continue,
             };
-            println!("Connecting to relay {}", relay);
+            info!("Connecting to relay {}", relay);
             let relay = *relay;
             let state = self.clone();
             let future = socket
@@ -200,7 +200,7 @@ impl NetworkState {
                     Ok(())
                 })
                 .map_err(move |err| {
-                    println!("Unable to connect to peer {}: {}", relay, err)
+                    warn!("Unable to connect to peer {}: {}", relay, err)
                 });
             self.spawn(future);
         }
@@ -264,6 +264,7 @@ impl NetworkState {
                 }
             }
             Message::PeerInfoRequest(identifier) => {
+                debug!("Received peer information request for {}", identifier);
                 let peer = match self.read().pib.get_peer(&identifier) {
                     Some(peer) => peer.clone(),
                     None => return,
@@ -283,10 +284,12 @@ impl NetworkState {
     }
 
     pub fn request_peer_info(&self, id: Identifier) {
+        debug!("Requesting peer information for {}", id);
         let relay = match self.read().pib.get_peer(&id).and_then(|p| p.relays.first()) {
             Some(id) => *id,
             None => return,
         };
+        debug!("Requesting peer information from relay {}", relay);
         let task = self.get_connection(relay)
             .and_then(move |conn| {
                 conn.send_peer_info_request(&id);

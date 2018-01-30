@@ -10,7 +10,7 @@ use serde::de::{Error, Unexpected};
 
 const IDENTIFIER_LENGTH: usize = 32;
 
-#[derive(Debug, Copy, Clone, Default, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Default, PartialEq, Eq, Hash)]
 pub struct Identifier([u8; IDENTIFIER_LENGTH]);
 
 impl Identifier {
@@ -70,6 +70,12 @@ impl fmt::Display for Identifier {
             write!(f, "{:02X}", byte)?;
         }
         Ok(())
+    }
+}
+
+impl fmt::Debug for Identifier {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        fmt::Display::fmt(self, f)
     }
 }
 

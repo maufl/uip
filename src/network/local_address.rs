@@ -4,12 +4,18 @@ use std::cmp::min;
 
 const INTERFACE_NAME_SIZE: usize = 16;
 
-#[derive(Copy, Clone, Debug, Default, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Copy, Clone, Default, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct InterfaceName([u8; INTERFACE_NAME_SIZE]);
 
 impl fmt::Display for InterfaceName {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         write!(fmt, "{}", String::from_utf8_lossy(&self.0))
+    }
+}
+
+impl fmt::Debug for InterfaceName {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        fmt::Display::fmt(self, fmt)
     }
 }
 
