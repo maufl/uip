@@ -1,6 +1,6 @@
-use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6, Ipv4Addr, Ipv6Addr};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 
-use interfaces::{Interface, Kind, NextHop, Address};
+use interfaces::{Address, Interface, Kind};
 use interfaces::flags::IFF_RUNNING;
 
 use network::LocalAddress;
@@ -14,37 +14,35 @@ pub fn discover_addresses() -> Result<Vec<LocalAddress>, AddressDiscoveryError> 
     })?;
     let iter = interfaces
         .into_iter()
-        .filter(|interface| {
-            !interface.is_loopback() && interface.flags.contains(IFF_RUNNING)
-        })
+        .filter(|interface| !interface.is_loopback() && interface.flags.contains(IFF_RUNNING))
         .flat_map(move |interface| {
-            interface.addresses.clone().into_iter().filter_map(
-                move |address| {
-                    match address.addr {
-                        Some(addr) if address.kind == Kind::Ipv4 || address.kind == Kind::Ipv6 => {
-                            Some(LocalAddress::new(
-                                &interface.name,
-                                addr,
-                                guess_gateway(&address),
-                                None,
-                            ))
-                        }
-                        _ => None,
+            interface
+                .addresses
+                .clone()
+                .into_iter()
+                .filter_map(move |address| match address.addr {
+                    Some(addr) if address.kind == Kind::Ipv4 || address.kind == Kind::Ipv6 => {
+                        Some(LocalAddress::new(
+                            &interface.name,
+                            addr,
+                            guess_gateway(&address),
+                            None,
+                        ))
                     }
-                },
-            )
+                    _ => None,
+                })
         });
     Ok(iter.collect())
 }
 
 fn guess_gateway(addr: &Address) -> Option<SocketAddr> {
     match (addr.addr, addr.mask) {
-        (Some(SocketAddr::V4(addr)), Some(SocketAddr::V4(mask))) => Some(
-            first_ipv4(addr, mask).into(),
-        ),
-        (Some(SocketAddr::V6(addr)), Some(SocketAddr::V6(mask))) => Some(
-            first_ipv6(addr, mask).into(),
-        ),
+        (Some(SocketAddr::V4(addr)), Some(SocketAddr::V4(mask))) => {
+            Some(first_ipv4(addr, mask).into())
+        }
+        (Some(SocketAddr::V6(addr)), Some(SocketAddr::V6(mask))) => {
+            Some(first_ipv6(addr, mask).into())
+        }
         _ => None,
     }
 }
@@ -56,7 +54,8 @@ fn first_ipv4(addr: SocketAddrV4, mask: SocketAddrV4) -> SocketAddrV4 {
         .zip(mask.ip().octets().iter())
         .map(|(a, b)| a & b)
         .collect();
-    masked[masked.len() - 1] = masked[masked.len() - 1] | 1u8;
+    let i = masked.len() - 1;
+    masked[i] = masked[i] | 1u8;
     let mut ip = [0u8; 4];
     ip.clone_from_slice(&masked);
     SocketAddrV4::new(Ipv4Addr::from(ip), addr.port())
@@ -69,7 +68,8 @@ fn first_ipv6(addr: SocketAddrV6, mask: SocketAddrV6) -> SocketAddrV6 {
         .zip(mask.ip().octets().iter())
         .map(|(a, b)| a & b)
         .collect();
-    masked[masked.len() - 1] = masked[masked.len() - 1] | 1u8;
+    let i = masked.len() - 1;
+    masked[i] = masked[i] | 1u8;
     let mut ip = [0u8; 16];
     ip.clone_from_slice(&masked);
     SocketAddrV6::new(
