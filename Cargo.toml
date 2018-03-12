@@ -29,3 +29,8 @@ libc = "0.2"
 nix = "0.9"
 mio = "0.6"
 clap = "2.29"
+
+[profile.release]
+opt-level = 3
+lto = true
+debug-assertions = false
