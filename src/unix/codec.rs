@@ -1,13 +1,18 @@
-use std::io::{Result, Error, ErrorKind};
+use std::io::{Error, ErrorKind, Result};
+use serde::{Deserialize, Serialize};
+use rmp_serde::{Deserializer, Serializer};
+use rmp_serde::encode::Error as EncodeError;
 use byteorder::{BigEndian, ByteOrder};
 use bytes::BytesMut;
 use bytes::buf::BufMut;
 use tokio_io::codec::{Decoder, Encoder};
 use Identifier;
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Frame {
     Connect(Identifier, u16),
     Data(BytesMut),
+    Accept(Identifier, u16),
 }
 
 pub struct ControlProtocolCodec;
@@ -41,7 +46,6 @@ impl Encoder for ControlProtocolCodec {
         }
     }
 }
-
 
 fn encode_connect(host_id: &Identifier, channel_id: u16, buf: &mut BytesMut) -> Result<()> {
     buf.reserve(5 + host_id.len());
