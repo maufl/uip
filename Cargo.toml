@@ -6,21 +6,20 @@ authors = ["Felix Konstantin Maurer <maufl@maufl.de>"]
 [dependencies]
 interfaces = "0.0.4"
 bytes = "0.4"
-byteorder = "1.0.0"
-#igd = "0.6.0"
-igd = { git = "https://github.com/maufl/rust-igd.git", branch = "into-the-future" }
+byteorder = "1"
+igd = "0.7"
 async-readline = { git = "https://github.com/dpc/async-readline" } 
 futures = "0.1"
 tokio-io = "0.1"
-tokio-core = "= 0.1.11"
+tokio-core = "= 0.1"
 tokio-openssl = "0.1"
 tokio-uds = "0.1"
 tokio-file-unix = "0.4"
 tokio-signal = "0.1"
-serde = "1.0"
-serde_json = "1.0"
+serde = "1"
+serde_json = "1"
 rmp-serde = "0.13"
-serde_derive = "1.0"
+serde_derive = "1"
 openssl = "0.9"
 log = "0.3"
 env_logger = "0.4"
@@ -28,7 +27,7 @@ pretty_env_logger = "0.2"
 libc = "0.2"
 nix = "0.9"
 mio = "0.6"
-clap = "2.29"
+clap = "2"
 
 [profile.release]
 opt-level = 3
