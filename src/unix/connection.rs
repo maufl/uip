@@ -5,24 +5,23 @@ use bytes::BytesMut;
 use tokio_uds::UnixStream;
 use tokio_io::codec::Framed;
 
-use state::State;
-use unix::{ControlProtocolCodec, Frame};
+use unix::{ControlProtocolCodec, Frame, State};
 use Identifier;
 
 #[derive(Clone)]
-pub struct UnixSocket {
+pub struct Connection {
     state: State,
     sink: Sender<Frame>,
 }
 
-impl UnixSocket {
+impl Connection {
     pub fn from_unix_socket(
         state: State,
         socket: Framed<UnixStream, ControlProtocolCodec>,
         host_id: Identifier,
         src_port: u16,
         dst_port: u16,
-    ) -> UnixSocket {
+    ) -> Connection {
         let (sink, stream) = socket.split();
         let (sender, receiver) = channel::<Frame>(10);
         state.spawn(
@@ -35,14 +34,16 @@ impl UnixSocket {
         let done = stream
             .for_each(move |frame| {
                 match frame {
-                    Frame::Data(buf) => state2.send_frame(host_id, src_port, dst_port, buf),
+                    Frame::Data(buf) => {
+                        state2.send_frame(host_id, src_port, dst_port, BytesMut::from(buf))
+                    }
                     Frame::Connect(_, _) => warn!("Unexpected UNIX message CONNECT"),
                 };
                 future::ok(())
             })
             .map_err(|err| warn!("Unix stream error: {}", err));
         state.spawn(done);
-        UnixSocket {
+        Connection {
             state: state,
             sink: sender,
         }
@@ -53,6 +54,6 @@ impl UnixSocket {
         data: BytesMut,
     ) -> impl Future<Item = Sender<Frame>, Error = SendError<Frame>> {
         println!("Sending frame");
-        self.sink.clone().send(Frame::Data(data))
+        self.sink.clone().send(Frame::Data(data.to_vec()))
     }
 }

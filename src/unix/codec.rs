@@ -11,8 +11,8 @@ use Identifier;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Frame {
     Connect(Identifier, u16),
-    Data(BytesMut),
-    Accept(Identifier, u16),
+    Data(Vec<u8>),
+    //Accept(Identifier, u16),
 }
 
 pub struct ControlProtocolCodec;
@@ -56,11 +56,11 @@ fn encode_connect(host_id: &Identifier, channel_id: u16, buf: &mut BytesMut) -> 
     Ok(())
 }
 
-fn encode_data(data: &BytesMut, buf: &mut BytesMut) -> Result<()> {
+fn encode_data(data: &Vec<u8>, buf: &mut BytesMut) -> Result<()> {
     buf.reserve(3 + data.len());
     buf.put_u8(2);
     buf.put_u16::<BigEndian>(data.len() as u16);
-    buf.put_slice(data);
+    buf.put_slice(&data);
     Ok(())
 }
 
@@ -82,5 +82,5 @@ fn parse_data(buf: &mut BytesMut) -> Result<Option<Frame>> {
         return Ok(None);
     };
     let _ = buf.split_to(3);
-    Ok(Some(Frame::Data(buf.split_to(len))))
+    Ok(Some(Frame::Data(buf.split_to(len).as_ref().to_vec())))
 }
