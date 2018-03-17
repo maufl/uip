@@ -1,16 +1,16 @@
-use std::net::{SocketAddr, IpAddr};
+use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::cell::{RefCell, Ref, RefMut};
-use futures::{Future, IntoFuture, Poll, Async, Stream, Sink};
+use std::cell::{Ref, RefCell, RefMut};
+use futures::{Async, Future, IntoFuture, Poll, Sink, Stream};
 use futures::sync::mpsc::Sender;
 use tokio_core::reactor::Handle;
 use bytes::BytesMut;
 use std::io;
 
 use data::{Peer, PeerInformationBase};
-use {Identity, Identifier};
+use {Identifier, Identity};
 use network::LocalAddress;
 use network::transport::{Connection as TransportConnection, Socket};
 use network::discovery::discover_addresses;
@@ -23,7 +23,7 @@ pub struct InnerState {
     pub relays: Vec<Identifier>,
     pub port: u16,
     handle: Handle,
-    upstream: Sender<(Identifier, u16, BytesMut)>,
+    upstream: Sender<(Identifier, u16, u16, BytesMut)>,
     sockets: HashMap<SocketAddr, Socket>,
 }
 
@@ -37,7 +37,7 @@ impl NetworkState {
         relays: Vec<Identifier>,
         port: u16,
         handle: Handle,
-        upstream: Sender<(Identifier, u16, BytesMut)>,
+        upstream: Sender<(Identifier, u16, u16, BytesMut)>,
     ) -> NetworkState {
         NetworkState(Rc::new(RefCell::new(InnerState {
             id: id,
@@ -67,23 +67,20 @@ impl NetworkState {
             Err(err) => return warn!("Error enumerating network interfaces: {}", err),
         };
         let port = self.read().port;
-        addresses.iter_mut().for_each(|address| {
-            address.internal.set_port(port)
-        });
+        addresses
+            .iter_mut()
+            .for_each(|address| address.internal.set_port(port));
         self.close_stale_sockets(&addresses);
         let new_addresses = addresses
             .iter()
-            .filter(|address| {
-                !self.read().sockets.contains_key(&address.internal)
-            })
+            .filter(|address| !self.read().sockets.contains_key(&address.internal))
             .filter(|address| match address.internal.ip() {
                 IpAddr::V4(_) => true,
                 IpAddr::V6(v6) => v6.is_global(),
             });
         for address in new_addresses {
-            let _ = self.open_socket(*address).map_err(|err| {
-                warn!("Error while opening socket: {}", err)
-            });
+            let _ = self.open_socket(*address)
+                .map_err(|err| warn!("Error while opening socket: {}", err));
         }
         self.publish_addresses();
     }
@@ -93,11 +90,10 @@ impl NetworkState {
             .sockets
             .keys()
             .filter(|address| {
-                current_addresses.iter().map(|addr| addr.internal).any(
-                    |addr| {
-                        &addr == *address
-                    },
-                )
+                current_addresses
+                    .iter()
+                    .map(|addr| addr.internal)
+                    .any(|addr| &addr == *address)
             })
             .cloned()
             .collect();
@@ -144,10 +140,9 @@ impl NetworkState {
             self.read().id.clone(),
             self.clone(),
         )?;
-        self.write().sockets.insert(
-            address.internal,
-            socket.clone(),
-        );
+        self.write()
+            .sockets
+            .insert(address.internal, socket.clone());
         self.connect_to_relays_on_socket(&socket);
         Ok(())
     }
@@ -165,9 +160,7 @@ impl NetworkState {
                 state.open_new_sockets();
                 Ok(())
             })
-            .map_err(|err| {
-                warn!("Error while listening for network changes: {}", err)
-            });
+            .map_err(|err| warn!("Error while listening for network changes: {}", err));
         self.spawn(task);
     }
 
@@ -199,9 +192,7 @@ impl NetworkState {
                     conn.send_peer_info(state.my_peer_information());
                     Ok(())
                 })
-                .map_err(move |err| {
-                    warn!("Unable to connect to peer {}: {}", relay, err)
-                });
+                .map_err(move |err| warn!("Unable to connect to peer {}: {}", relay, err));
             self.spawn(future);
         }
     }
@@ -214,9 +205,7 @@ impl NetworkState {
         self.read()
             .pib
             .lookup_peer_address(&remote_id)
-            .ok_or_else(|| {
-                io::Error::new(io::ErrorKind::NotFound, "peer address not found")
-            })
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "peer address not found"))
             .into_future()
             .and_then(move |addr| state.connect_with_address(remote_id, addr))
     }
@@ -238,14 +227,14 @@ impl NetworkState {
             .and_then(move |socket| socket.open_connection(remote_id, address))
     }
 
-    pub fn deliver_frame(&self, host_id: Identifier, channel_id: u16, data: BytesMut) {
-        if channel_id == 0 {
+    pub fn deliver_frame(&self, host_id: Identifier, src_port: u16, dst_port: u16, data: BytesMut) {
+        if src_port == 0 && dst_port == 0 {
             return self.process_control_message(host_id, data);
         }
         let task = self.read()
             .upstream
             .clone()
-            .send((host_id, channel_id, data))
+            .send((host_id, src_port, dst_port, data))
             .map(|_| ())
             .map_err(|err| warn!("Failed to pass message to upstream: {}", err));
         self.spawn(task);
@@ -256,8 +245,7 @@ impl NetworkState {
             Message::PeerInfo(peer_info) => {
                 info!(
                     "Received new peer information from {}: {:?}",
-                    host_id,
-                    peer_info
+                    host_id, peer_info
                 );
                 if host_id == peer_info.peer.id {
                     self.write().pib.add_peer(peer_info.peer.id, peer_info.peer)
@@ -274,9 +262,7 @@ impl NetworkState {
                         conn.send_peer_info(peer);
                         Ok(())
                     })
-                    .map_err(|err| {
-                        warn!("Unable to respond with peer information: {}", err)
-                    });
+                    .map_err(|err| warn!("Unable to respond with peer information: {}", err));
                 self.spawn(task);
             }
             Message::Invalid(_) => warn!("Received invalid control message from peer {}", host_id),
@@ -298,20 +284,20 @@ impl NetworkState {
             .map_err(move |err| {
                 warn!(
                     "Unable to request peer information for {} from relay {}: {}",
-                    id,
-                    relay,
-                    err
+                    id, relay, err
                 )
             });
         self.spawn(task);
     }
 
-    pub fn send_frame(&self, host_id: Identifier, channel_id: u16, data: BytesMut) {
+    pub fn send_frame(&self, host_id: Identifier, src_port: u16, dst_port: u16, data: BytesMut) {
         let task = self.get_connection(host_id)
             .and_then(move |connection| {
-                connection.send_data_frame(channel_id, data).map_err(|_| {
-                    io::Error::new(io::ErrorKind::BrokenPipe, "unable to forward frame")
-                })
+                connection
+                    .send_data_frame(src_port, dst_port, data)
+                    .map_err(|_| {
+                        io::Error::new(io::ErrorKind::BrokenPipe, "unable to forward frame")
+                    })
             })
             .map(|_| {})
             .map_err(|err| warn!("Error while sending frame: {}", err));
@@ -328,9 +314,10 @@ impl NetworkState {
             .values()
             .filter_map(|socket| socket.get_connection(&host_id))
             .next();
-        connection.ok_or(()).into_future().or_else(move |_| {
-            state.connect(host_id)
-        })
+        connection
+            .ok_or(())
+            .into_future()
+            .or_else(move |_| state.connect(host_id))
     }
 }
 

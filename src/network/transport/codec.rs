@@ -1,12 +1,16 @@
-use tokio_io::codec::{Encoder, Decoder};
+use tokio_io::codec::{Decoder, Encoder};
 use std::io::{Error, ErrorKind};
-use bytes::{BytesMut, BufMut, BigEndian as BytesBigEndian};
+use bytes::{BigEndian as BytesBigEndian, BufMut, BytesMut};
 use byteorder::{BigEndian, ByteOrder};
 
 pub enum Frame {
     Ping,
     Pong,
-    Data(u16, BytesMut),
+    Data {
+        src_port: u16,
+        dst_port: u16,
+        data: BytesMut,
+    },
 }
 
 pub struct Codec();
@@ -19,9 +23,14 @@ impl Encoder for Codec {
         match item {
             Frame::Ping => dst.put_u8(1),
             Frame::Pong => dst.put_u8(2),
-            Frame::Data(app_id, data) => {
+            Frame::Data {
+                src_port,
+                dst_port,
+                data,
+            } => {
                 dst.put_u8(3);
-                dst.put_u16::<BytesBigEndian>(app_id);
+                dst.put_u16::<BytesBigEndian>(src_port);
+                dst.put_u16::<BytesBigEndian>(dst_port);
                 dst.put_u16::<BytesBigEndian>(data.len() as u16);
                 dst.put(data);
             }
@@ -45,15 +54,20 @@ impl Decoder for Codec {
             3 => {}
             _ => return Err(Error::new(ErrorKind::InvalidData, "invalid message type")),
         };
-        if src.len() < 5 {
+        if src.len() < 7 {
             return Ok(None);
         };
-        let app_id = BigEndian::read_u16(&src[1..3]);
-        let length = BigEndian::read_u16(&src[3..5]) as usize;
-        if src.len() < 5 + length {
+        let src_port = BigEndian::read_u16(&src[1..3]);
+        let dst_port = BigEndian::read_u16(&src[3..5]);
+        let length = BigEndian::read_u16(&src[5..7]) as usize;
+        if src.len() < 7 + length {
             return Ok(None);
         }
-        src.split_to(5);
-        Ok(Some(Frame::Data(app_id, src.split_to(length))))
+        src.split_to(7);
+        Ok(Some(Frame::Data {
+            src_port: src_port,
+            dst_port: dst_port,
+            data: src.split_to(length),
+        }))
     }
 }

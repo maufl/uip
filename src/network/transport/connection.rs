@@ -1,7 +1,7 @@
 use tokio_io::{AsyncRead, AsyncWrite};
 use tokio_core::reactor::Handle;
-use futures::{Stream, Sink, Future};
-use futures::sync::mpsc::{Sender, SendError, channel};
+use futures::{Future, Sink, Stream};
+use futures::sync::mpsc::{channel, SendError, Sender};
 use tokio_openssl::SslStream;
 use bytes::BytesMut;
 
@@ -25,14 +25,12 @@ impl Connection {
     ) -> Connection
     where
         S: AsyncRead + AsyncWrite + 'static,
-        F: Fn(Identifier, u16, BytesMut) + 'static,
+        F: Fn(Identifier, u16, u16, BytesMut) + 'static,
     {
         let (sink, stream) = stream.framed(Codec()).split();
         let (sender, receiver) = channel::<Frame>(10);
         let task = receiver
-            .forward(sink.sink_map_err(
-                |err| println!("Unexpected sink error: {}", err),
-            ))
+            .forward(sink.sink_map_err(|err| println!("Unexpected sink error: {}", err)))
             .map(|_| ());
         handle.spawn(task);
         let task = stream
@@ -40,7 +38,11 @@ impl Connection {
                 match frame {
                     Frame::Ping => println!("Ping"),
                     Frame::Pong => println!("Pong"),
-                    Frame::Data(channel_id, data) => callback(remote_id, channel_id, data),
+                    Frame::Data {
+                        src_port,
+                        dst_port,
+                        data,
+                    } => callback(remote_id, src_port, dst_port, data),
                 };
                 Ok(())
             })
@@ -53,19 +55,26 @@ impl Connection {
     }
 
     pub fn send_frame(&self, f: Frame) {
-        let task = self.sink.clone().send(f).map(|_| ()).map_err(|err| {
-            warn!("Error sending frame: {}", err)
-        });
+        let task = self.sink
+            .clone()
+            .send(f)
+            .map(|_| ())
+            .map_err(|err| warn!("Error sending frame: {}", err));
         self.handle.spawn(task);
     }
 
     pub fn send_data_frame(
         &self,
-        channel_id: u16,
+        src_port: u16,
+        dst_port: u16,
         data: BytesMut,
     ) -> impl Future<Item = Sender<Frame>, Error = SendError<Frame>> {
-        println!("Sending frame to {}", channel_id);
-        self.sink.clone().send(Frame::Data(channel_id, data))
+        debug!("Sending frame from port {} to port {}", src_port, dst_port);
+        self.sink.clone().send(Frame::Data {
+            src_port: src_port,
+            dst_port: dst_port,
+            data: data,
+        })
     }
 
     pub fn send_control_message(&self, msg: Message) {
@@ -79,9 +88,9 @@ impl Connection {
             }
             Ok(buf) => buf,
         };
-        let task = self.send_data_frame(0, buf).map(|_| {}).map_err(|err| {
-            warn!("Unable to send peer information: {}", err)
-        });
+        let task = self.send_data_frame(0, 0, buf)
+            .map(|_| {})
+            .map_err(|err| warn!("Unable to send peer information: {}", err));
         self.handle.spawn(task);
     }
 

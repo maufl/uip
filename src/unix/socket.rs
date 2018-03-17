@@ -1,14 +1,13 @@
-use futures::{Stream, Sink, Future};
+use futures::{Future, Sink, Stream};
 use futures::future;
-use futures::sync::mpsc::{Sender, SendError, channel};
+use futures::sync::mpsc::{channel, SendError, Sender};
 use bytes::BytesMut;
 use tokio_uds::UnixStream;
 use tokio_io::codec::Framed;
 
 use state::State;
-use unix::{Frame, ControlProtocolCodec};
+use unix::{ControlProtocolCodec, Frame};
 use Identifier;
-
 
 #[derive(Clone)]
 pub struct UnixSocket {
@@ -21,7 +20,8 @@ impl UnixSocket {
         state: State,
         socket: Framed<UnixStream, ControlProtocolCodec>,
         host_id: Identifier,
-        channel_id: u16,
+        src_port: u16,
+        dst_port: u16,
     ) -> UnixSocket {
         let (sink, stream) = socket.split();
         let (sender, receiver) = channel::<Frame>(10);
@@ -35,7 +35,7 @@ impl UnixSocket {
         let done = stream
             .for_each(move |frame| {
                 match frame {
-                    Frame::Data(buf) => state2.send_frame(host_id, channel_id, buf),
+                    Frame::Data(buf) => state2.send_frame(host_id, src_port, dst_port, buf),
                     Frame::Connect(_, _) => warn!("Unexpected UNIX message CONNECT"),
                 };
                 future::ok(())

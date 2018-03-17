@@ -1,24 +1,24 @@
 #![feature(conservative_impl_trait)]
-extern crate tokio_core;
-extern crate tokio_signal;
-extern crate serde_json;
 extern crate async_readline;
 extern crate bytes;
 extern crate futures;
 extern crate pretty_env_logger;
+extern crate serde_json;
+extern crate tokio_core;
+extern crate tokio_signal;
 
 extern crate uip;
 
 use uip::Configuration;
 use uip::State;
-use uip::{Identity, Identifier};
+use uip::{Identifier, Identity};
 
 use tokio_core::reactor::Core;
 use std::fs::File;
 use std::path::Path;
 use futures::{Future, Stream};
 use std::env;
-use std::io::{Write, Error, ErrorKind};
+use std::io::{Error, ErrorKind, Write};
 use std::net::SocketAddr;
 use std::str::FromStr;
 use bytes::BytesMut;
@@ -59,10 +59,8 @@ fn main() {
         .and_then(move |line| {
             let command = String::from_utf8(line.line.clone()).unwrap();
             if command == "exit" {
-                if let Err(err) = write_configuration(
-                    config_file_path.as_ref(),
-                    &state2.to_configuration(),
-                )
+                if let Err(err) =
+                    write_configuration(config_file_path.as_ref(), &state2.to_configuration())
                 {
                     println!("Error while saving configuration: {}", err);
                 };
@@ -77,10 +75,11 @@ fn main() {
                     let addr = args.next().expect("Peer address required");
                     let sock_addr: SocketAddr = addr.parse().expect("Invalid socket address");
                     let inner_state = state2.write();
-                    inner_state.network.write().pib.add_peer_address(
-                        id,
-                        sock_addr,
-                    );
+                    inner_state
+                        .network
+                        .write()
+                        .pib
+                        .add_peer_address(id, sock_addr);
                 }
             } else if command.starts_with("relay add") {
                 let mut args = command.split_whitespace();
@@ -93,17 +92,21 @@ fn main() {
                 }
             } else if command.starts_with("send ") {
                 let mut args = command.split_whitespace();
-                if args.clone().count() < 4 {
-                    println!("send requires ID and channel number")
+                if args.clone().count() < 5 {
+                    println!("send requires ID, source port and destination port")
                 } else {
                     let id = Identifier::from_str(args.nth(1).expect("Peer id required"))
                         .expect("Invalid peer id");
-                    let channel = args.next()
-                        .expect("Channel number required")
+                    let src_port = args.next()
+                        .expect("Source port required")
                         .parse::<u16>()
-                        .expect("Channel number invalid");
+                        .expect("Source port invalid");
+                    let dst_port = args.next()
+                        .expect("Destination port required")
+                        .parse::<u16>()
+                        .expect("Destination port invalid");
                     let data = args.next().expect("No data to send");
-                    state2.send_frame(id, channel, BytesMut::from(data));
+                    state2.send_frame(id, src_port, dst_port, BytesMut::from(data));
                 }
             } else if command.starts_with("request peer-information") {
                 let mut args = command.split_whitespace();
@@ -140,17 +143,13 @@ fn read_configuration(path: &str) -> Result<Configuration, String> {
             return Err(format!("Error while opening configuration file: {}", err));
         }
     };
-    serde_json::from_reader(config_file).map_err(|err| {
-        format!("Error while reading configuration file: {}", err)
-    })
+    serde_json::from_reader(config_file)
+        .map_err(|err| format!("Error while reading configuration file: {}", err))
 }
 fn write_configuration(path: &str, conf: &Configuration) -> Result<(), String> {
-    let config_file = File::create(path).map_err(|err| {
-        format!("Error while opening configuration file: {}", err)
-    })?;
+    let config_file = File::create(path)
+        .map_err(|err| format!("Error while opening configuration file: {}", err))?;
     serde_json::to_writer_pretty(config_file, conf)
         .map(|_| ())
-        .map_err(|err| {
-            format!("Error while reading configuration file: {}", err)
-        })
+        .map_err(|err| format!("Error while reading configuration file: {}", err))
 }

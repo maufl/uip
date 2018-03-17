@@ -1,23 +1,23 @@
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::cell::{RefCell, Ref, RefMut};
+use std::cell::{Ref, RefCell, RefMut};
 use std::io;
 use std::error::Error;
 use std::string::ToString;
 use std::net::SocketAddr;
 use openssl::x509::X509;
-use openssl::ssl::{SslConnectorBuilder, SslConnector, SslAcceptorBuilder, SslAcceptor, SslMethod,
+use openssl::ssl::{SslAcceptor, SslAcceptorBuilder, SslConnector, SslConnectorBuilder, SslMethod,
                    SslVerifyMode, SSL_VERIFY_PEER};
 use openssl::stack::Stack;
-use futures::{Stream, Future, IntoFuture};
+use futures::{Future, IntoFuture, Stream};
 use tokio_core::reactor::Handle;
 use tokio_io::{AsyncRead, AsyncWrite};
-use tokio_openssl::{SslStream, SslConnectorExt, SslAcceptorExt};
+use tokio_openssl::{SslAcceptorExt, SslConnectorExt, SslStream};
 
 use network::io::SharedSocket;
 use network::{LocalAddress, NetworkState};
 use network::transport::Connection;
-use {Identity, Identifier};
+use {Identifier, Identity};
 use network::discovery::request_external_address;
 
 pub struct Inner {
@@ -94,13 +94,14 @@ impl Socket {
                 .map_err(|err| err.description().to_string())
                 .and_then(move |connection| {
                     let id = id_from_connection(&connection)?;
-                    let conn =
-                        Connection::from_tls_stream(
-                            connection,
-                            id,
-                            handle,
-                            move |id, channel, data| network_state.deliver_frame(id, channel, data),
-                        );
+                    let conn = Connection::from_tls_stream(
+                        connection,
+                        id,
+                        handle,
+                        move |id, src_port, dst_port, data| {
+                            network_state.deliver_frame(id, src_port, dst_port, data)
+                        },
+                    );
                     socket.write().connections.insert(id, conn);
                     Ok(())
                 })
@@ -135,7 +136,9 @@ impl Socket {
                     stream,
                     identifier,
                     handle,
-                    move |id, channel, data| state2.deliver_frame(id, channel, data),
+                    move |id, src_port, dst_port, data| {
+                        state2.deliver_frame(id, src_port, dst_port, data)
+                    },
                 );
                 Ok(conn)
             })
@@ -148,9 +151,7 @@ impl Socket {
             _ => return,
         };
         let task = request_external_address(internal, &self.read().handle)
-            .map(move |external| {
-                socket.write().address.external = Some(SocketAddr::V4(external))
-            })
+            .map(move |external| socket.write().address.external = Some(SocketAddr::V4(external)))
             .map_err(|err| warn!("Unable to request external address: {}", err));
         self.read().handle.spawn(task);
     }
@@ -173,12 +174,11 @@ where
     S: AsyncRead + AsyncWrite + 'static,
 {
     let session = connection.get_ref().ssl();
-    let x509 = session.peer_certificate().ok_or(
-        "Client did not provide a certificate",
-    )?;
-    Identifier::from_x509_certificate(&x509).map_err(|err| {
-        format!("Unable to generate identifier from certificate: {}", err)
-    })
+    let x509 = session
+        .peer_certificate()
+        .ok_or("Client did not provide a certificate")?;
+    Identifier::from_x509_certificate(&x509)
+        .map_err(|err| format!("Unable to generate identifier from certificate: {}", err))
 }
 
 fn acceptor_for_id(id: &Identity) -> SslAcceptor {
@@ -195,16 +195,15 @@ fn acceptor_for_id(id: &Identity) -> SslAcceptor {
     builder.build()
 }
 
-
 fn connector_for_id(id: &Identity) -> SslConnector {
     let mut builder =
         SslConnectorBuilder::new(SslMethod::dtls()).expect("Unable to build new SSL connector");
     builder.set_verify(SslVerifyMode::empty());
-    builder.set_certificate(&id.cert).expect(
-        "Unable to get reference to client certificate",
-    );
-    builder.set_private_key(&id.key).expect(
-        "Unable to get a reference to the client key",
-    );
+    builder
+        .set_certificate(&id.cert)
+        .expect("Unable to get reference to client certificate");
+    builder
+        .set_private_key(&id.key)
+        .expect("Unable to get a reference to the client key");
     builder.build()
 }
