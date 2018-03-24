@@ -1,31 +1,32 @@
-use std::rc::Rc;
-use std::cell::{Ref, RefCell, RefMut};
-use futures::{Future, Poll, Stream};
+use futures::prelude::*;
 use futures::sync::mpsc::{channel, Receiver};
-use tokio_core::reactor::Handle;
 use bytes::BytesMut;
+use tokio_core::reactor::Handle;
 
 use network::NetworkState;
 use data::PeerInformationBase;
 use configuration::Configuration;
-use {Identifier, Identity};
-use unix::State as UnixState;
+use {Identifier, Identity, Shared};
+use unix::UnixState;
 
-pub struct InnerState {
+pub struct State {
     pub id: Identity,
     handle: Handle,
-    pub unix: UnixState,
-    pub network: NetworkState,
+    pub unix: Shared<UnixState>,
+    pub network: Shared<NetworkState>,
 }
 
-#[derive(Clone)]
-pub struct State(pub Rc<RefCell<InnerState>>);
-
 impl State {
-    pub fn from_configuration(config: Configuration, handle: &Handle) -> State {
+    pub fn shared(self) -> Shared<State> {
+        Shared::new(self)
+    }
+}
+
+impl Shared<State> {
+    pub fn from_configuration(config: Configuration, handle: &Handle) -> Shared<State> {
         let (network_sink, network_source) = channel::<(Identifier, u16, u16, BytesMut)>(5);
         let (unix_sink, unix_source) = channel::<(Identifier, u16, u16, BytesMut)>(5);
-        let state = State(Rc::new(RefCell::new(InnerState {
+        let state = State {
             id: config.id.clone(),
             network: NetworkState::new(
                 config.id,
@@ -34,19 +35,19 @@ impl State {
                 config.port,
                 handle.clone(),
                 network_sink,
-            ),
-            unix: UnixState::new(handle.clone(), config.ctl_socket, unix_sink),
+            ).shared(),
+            unix: UnixState::new(config.ctl_socket, handle.clone(), unix_sink).shared(),
             handle: handle.clone(),
-        })));
+        }.shared();
         state.forward_network_data(network_source);
         state.forward_unix_data(unix_source);
         state
     }
 
-    pub fn from_id(id: Identity, handle: &Handle) -> State {
+    pub fn from_id(id: Identity, handle: &Handle) -> Shared<State> {
         let (network_sink, network_source) = channel::<(Identifier, u16, u16, BytesMut)>(5);
         let (unix_sink, unix_source) = channel::<(Identifier, u16, u16, BytesMut)>(5);
-        let state = State(Rc::new(RefCell::new(InnerState {
+        let state = State {
             id: id.clone(),
             network: NetworkState::new(
                 id.clone(),
@@ -55,14 +56,14 @@ impl State {
                 0,
                 handle.clone(),
                 network_sink,
-            ),
+            ).shared(),
             unix: UnixState::new(
-                handle.clone(),
                 format!("/run/user/1000/{}.sock", &id.identifier),
+                handle.clone(),
                 unix_sink,
-            ),
+            ).shared(),
             handle: handle.clone(),
-        })));
+        }.shared();
         state.forward_network_data(network_source);
         state.forward_unix_data(unix_source);
         state
@@ -76,7 +77,7 @@ impl State {
                 Ok(())
             })
             .map_err(|_| error!("Failed to receive frames from network layer"));
-        self.spawn(task);
+        self.read().handle.spawn(task);
     }
 
     pub fn forward_unix_data(&self, source: Receiver<(Identifier, u16, u16, BytesMut)>) {
@@ -87,7 +88,7 @@ impl State {
                 Ok(())
             })
             .map_err(|_| error!("Failed to receive frames from network layer"));
-        self.spawn(task);
+        self.read().handle.spawn(task);
     }
 
     pub fn to_configuration(&self) -> Configuration {
@@ -100,22 +101,6 @@ impl State {
             port: network.port,
             ctl_socket: state.unix.ctl_socket().clone(),
         }
-    }
-
-    pub fn read(&self) -> Ref<InnerState> {
-        self.0.borrow()
-    }
-
-    pub fn write(&self) -> RefMut<InnerState> {
-        self.0.borrow_mut()
-    }
-
-    pub fn spawn<F: Future<Item = (), Error = ()> + 'static>(&self, f: F) {
-        self.read().handle.spawn(f)
-    }
-
-    pub fn handle(&self) -> Handle {
-        self.read().handle.clone()
     }
 
     pub fn send_frame(&self, host_id: Identifier, src_port: u16, dst_port: u16, data: BytesMut) {
@@ -135,7 +120,7 @@ impl State {
     }
 }
 
-impl Future for State {
+impl Future for Shared<State> {
     type Item = ();
     type Error = ();
 

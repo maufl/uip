@@ -1,5 +1,5 @@
-mod shared_socket;
+mod socket;
 mod connection;
 
-pub use self::shared_socket::SharedSocket;
+pub use self::socket::Socket;
 pub use self::connection::Connection;

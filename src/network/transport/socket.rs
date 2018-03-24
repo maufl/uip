@@ -1,6 +1,4 @@
 use std::collections::HashMap;
-use std::rc::Rc;
-use std::cell::{Ref, RefCell, RefMut};
 use std::io;
 use std::error::Error;
 use std::string::ToString;
@@ -14,66 +12,63 @@ use tokio_core::reactor::Handle;
 use tokio_io::{AsyncRead, AsyncWrite};
 use tokio_openssl::{SslAcceptorExt, SslConnectorExt, SslStream};
 
-use network::io::SharedSocket;
+use network::io::Socket as IoSocket;
 use network::{LocalAddress, NetworkState};
 use network::transport::Connection;
-use {Identifier, Identity};
+use {Identifier, Identity, Shared};
 use network::discovery::request_external_address;
 
-pub struct Inner {
+#[derive(Clone)]
+pub struct Socket {
     id: Identity,
     address: LocalAddress,
-    socket: SharedSocket,
+    socket: Shared<IoSocket>,
     handle: Handle,
     pub connections: HashMap<Identifier, Connection>,
-    state: NetworkState,
+    state: Shared<NetworkState>,
 }
 
-#[derive(Clone)]
-pub struct Socket(Rc<RefCell<Inner>>);
-
 impl Socket {
-    fn new(
-        socket: SharedSocket,
+    pub fn new(
+        socket: Shared<IoSocket>,
         address: LocalAddress,
         handle: Handle,
-        state: NetworkState,
+        state: Shared<NetworkState>,
         id: Identity,
     ) -> Socket {
-        Socket(Rc::new(RefCell::new(Inner {
+        Socket {
             id: id,
             address: address,
             socket: socket,
             handle: handle,
             state: state,
             connections: HashMap::new(),
-        })))
+        }
     }
+
+    pub fn shared(self) -> Shared<Socket> {
+        Shared::new(self)
+    }
+}
+
+impl Shared<Socket> {
     pub fn open(
         address: LocalAddress,
         handle: &Handle,
         id: Identity,
-        state: NetworkState,
-    ) -> io::Result<Socket> {
-        let shared_socket = SharedSocket::bind(address, handle.clone())?;
-        let socket = Self::new(
+        state: Shared<NetworkState>,
+    ) -> io::Result<Shared<Socket>> {
+        let shared_socket = Shared::<IoSocket>::bind(address, handle.clone())?;
+        let socket = Socket::new(
             shared_socket.clone(),
             address,
             handle.clone(),
             state.clone(),
             id,
-        );
+        ).shared();
         socket.listen();
         socket.request_external_address();
         Ok(socket)
-    }
-
-    pub fn read(&self) -> Ref<Inner> {
-        self.0.borrow()
-    }
-
-    fn write(&self) -> RefMut<Inner> {
-        self.0.borrow_mut()
     }
 
     pub fn get_connection(&self, identifier: &Identifier) -> Option<Connection> {

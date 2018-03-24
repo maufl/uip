@@ -1,8 +1,6 @@
 use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 use std::collections::HashMap;
-use std::rc::Rc;
-use std::cell::{Ref, RefCell, RefMut};
 use futures::{Async, Future, IntoFuture, Poll, Sink, Stream};
 use futures::sync::mpsc::Sender;
 use tokio_core::reactor::Handle;
@@ -10,25 +8,23 @@ use bytes::BytesMut;
 use std::io;
 
 use data::{Peer, PeerInformationBase};
-use {Identifier, Identity};
+use {Identifier, Identity, Shared};
 use network::LocalAddress;
 use network::transport::{Connection as TransportConnection, Socket};
 use network::discovery::discover_addresses;
 use network::change::Listener;
 use network::protocol::Message;
 
-pub struct InnerState {
+#[derive(Clone)]
+pub struct NetworkState {
     pub id: Identity,
     pub pib: PeerInformationBase,
     pub relays: Vec<Identifier>,
     pub port: u16,
     handle: Handle,
     upstream: Sender<(Identifier, u16, u16, BytesMut)>,
-    sockets: HashMap<SocketAddr, Socket>,
+    sockets: HashMap<SocketAddr, Shared<Socket>>,
 }
-
-#[derive(Clone)]
-pub struct NetworkState(Rc<RefCell<InnerState>>);
 
 impl NetworkState {
     pub fn new(
@@ -39,7 +35,7 @@ impl NetworkState {
         handle: Handle,
         upstream: Sender<(Identifier, u16, u16, BytesMut)>,
     ) -> NetworkState {
-        NetworkState(Rc::new(RefCell::new(InnerState {
+        NetworkState {
             id: id,
             pib: pib,
             relays: relays,
@@ -47,16 +43,15 @@ impl NetworkState {
             handle: handle,
             upstream: upstream,
             sockets: HashMap::new(),
-        })))
-    }
-    pub fn read(&self) -> Ref<InnerState> {
-        self.0.borrow()
+        }
     }
 
-    pub fn write(&self) -> RefMut<InnerState> {
-        self.0.borrow_mut()
+    pub fn shared(self) -> Shared<NetworkState> {
+        Shared::new(self)
     }
+}
 
+impl Shared<NetworkState> {
     pub fn spawn<F: Future<Item = (), Error = ()> + 'static>(&self, f: F) {
         self.read().handle.spawn(f)
     }
@@ -134,7 +129,7 @@ impl NetworkState {
 
     fn open_socket(&self, address: LocalAddress) -> io::Result<()> {
         debug!("Opening new socket on address {:?}", address);
-        let socket = Socket::open(
+        let socket = Shared::<Socket>::open(
             address,
             &self.read().handle,
             self.read().id.clone(),
@@ -174,7 +169,7 @@ impl NetworkState {
         }
     }
 
-    pub fn connect_to_relays_on_socket(&self, socket: &Socket) {
+    pub fn connect_to_relays_on_socket(&self, socket: &Shared<Socket>) {
         for relay in &self.read().relays {
             if socket.get_connection(relay).is_some() {
                 continue;
@@ -321,7 +316,7 @@ impl NetworkState {
     }
 }
 
-impl Future for NetworkState {
+impl Future for Shared<NetworkState> {
     type Item = ();
     type Error = ();
 

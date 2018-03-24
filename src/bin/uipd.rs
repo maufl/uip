@@ -1,26 +1,26 @@
 #![feature(conservative_impl_trait)]
-extern crate tokio_core;
-extern crate serde_json;
-extern crate tokio_file_unix;
-extern crate tokio_io;
-extern crate tokio_signal;
+extern crate clap;
+extern crate env_logger;
 extern crate futures;
 #[macro_use]
 extern crate log;
-extern crate env_logger;
-extern crate clap;
+extern crate serde_json;
+extern crate tokio_core;
+extern crate tokio_file_unix;
+extern crate tokio_io;
+extern crate tokio_signal;
 
 extern crate uip;
 
 use uip::Configuration;
-use uip::{State, Identity};
+use uip::{Identity, Shared, State};
 
 use tokio_core::reactor::Core;
 use std::fs::File;
 use std::path::Path;
 use futures::stream::Stream;
 use futures::Future;
-use clap::{Arg, App, SubCommand};
+use clap::{App, Arg, SubCommand};
 
 fn main() {
     env_logger::init().unwrap();
@@ -32,7 +32,7 @@ fn main() {
 
     if Some("generate-config") == matches.subcommand_name() {
         let id = Identity::generate().expect("Unable to generate an ID");
-        let state = State::from_id(id, &core.handle());
+        let state = Shared::<State>::from_id(id, &core.handle());
         return write_configuration(config_file_path, &state.to_configuration())
             .unwrap_or_else(|err| error!("{}", err));
     }
@@ -47,7 +47,7 @@ fn main() {
     if config.port == 0u16 {
         config.port = 0xfe11;
     }
-    let state = State::from_configuration(config, &core.handle());
+    let state = Shared::<State>::from_configuration(config, &core.handle());
 
     println!("Starting client for ID {}", state.read().id.identifier);
     core.handle().spawn(state.clone());
@@ -82,17 +82,13 @@ fn read_configuration(path: String) -> Result<Configuration, String> {
             return Err(format!("Error while opening configuration file: {}", err));
         }
     };
-    serde_json::from_reader(config_file).map_err(|err| {
-        format!("Error while reading configuration file: {}", err)
-    })
+    serde_json::from_reader(config_file)
+        .map_err(|err| format!("Error while reading configuration file: {}", err))
 }
 fn write_configuration(path: &str, conf: &Configuration) -> Result<(), String> {
-    let config_file = File::create(path).map_err(|err| {
-        format!("Error while opening configuration file: {}", err)
-    })?;
+    let config_file = File::create(path)
+        .map_err(|err| format!("Error while opening configuration file: {}", err))?;
     serde_json::to_writer_pretty(config_file, conf)
         .map(|_| ())
-        .map_err(|err| {
-            format!("Error while reading configuration file: {}", err)
-        })
+        .map_err(|err| format!("Error while reading configuration file: {}", err))
 }

@@ -5,18 +5,18 @@ use bytes::BytesMut;
 use tokio_uds::UnixStream;
 use tokio_io::codec::Framed;
 
-use unix::{ControlProtocolCodec, Frame, State};
-use Identifier;
+use unix::{ControlProtocolCodec, Frame, UnixState};
+use {Identifier, Shared};
 
 #[derive(Clone)]
 pub struct Connection {
-    state: State,
+    state: Shared<UnixState>,
     sink: Sender<Frame>,
 }
 
 impl Connection {
     pub fn from_unix_socket(
-        state: State,
+        state: Shared<UnixState>,
         socket: Framed<UnixStream, ControlProtocolCodec>,
         host_id: Identifier,
         src_port: u16,

@@ -1,18 +1,17 @@
 use tokio_core::net::UdpSocket;
 use tokio_core::reactor::Handle;
-use futures::sync::mpsc::{channel, Sender, Receiver};
+use futures::sync::mpsc::{channel, Receiver, Sender};
 use futures::stream::poll_fn;
-use std::rc::Rc;
-use std::cell::{RefCell, Ref, RefMut};
-use futures::{Future, Poll, Async, Stream, Sink};
+use futures::{Async, Future, Poll, Sink, Stream};
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::io::{Result, ErrorKind};
+use std::io::{ErrorKind, Result};
 
 use network::LocalAddress;
+use Shared;
 use super::Connection;
 
-struct Socket {
+pub struct Socket {
     inner: UdpSocket,
     connections: HashMap<SocketAddr, Sender<Vec<u8>>>,
     handle: Handle,
@@ -20,39 +19,33 @@ struct Socket {
     address: LocalAddress,
 }
 
-#[derive(Clone)]
-pub struct SharedSocket(Rc<RefCell<Socket>>);
+impl Socket {
+    pub fn shared(self) -> Shared<Socket> {
+        Shared::new(self)
+    }
+}
 
-impl SharedSocket {
-    pub fn bind(addr: LocalAddress, handle: Handle) -> Result<SharedSocket> {
-        UdpSocket::bind(&addr.internal, &handle).and_then(move |socket| {
-            SharedSocket::from_socket(socket, addr, handle)
-        })
+impl Shared<Socket> {
+    pub fn bind(addr: LocalAddress, handle: Handle) -> Result<Shared<Socket>> {
+        UdpSocket::bind(&addr.internal, &handle)
+            .and_then(move |socket| Shared::<Socket>::from_socket(socket, addr, handle))
     }
 
     pub fn from_socket(
         sock: UdpSocket,
         address: LocalAddress,
         handle: Handle,
-    ) -> Result<SharedSocket> {
+    ) -> Result<Shared<Socket>> {
         let (sender, receiver) = channel::<Connection>(10);
-        let socket = SharedSocket(Rc::new(RefCell::new(Socket {
+        let socket = Socket {
             inner: sock,
             connections: HashMap::new(),
             handle: handle,
             incoming: receiver,
             address: address,
-        })));
+        }.shared();
         socket.listen(sender);
         Ok(socket)
-    }
-
-    fn read(&self) -> Ref<Socket> {
-        self.0.borrow()
-    }
-
-    fn write(&self) -> RefMut<Socket> {
-        self.0.borrow_mut()
     }
 
     fn listen(&self, sender: Sender<Connection>) {
@@ -74,9 +67,11 @@ impl SharedSocket {
                 Ok(d) => d,
             };
             if let Some(connection) = socket.forward_or_new_connection(&datagram[0..read], addr) {
-                let task = sender.clone().send(connection).map(|_| ()).map_err(|err| {
-                    warn!("Unable to forward new UDP connection: {}", err)
-                });
+                let task = sender
+                    .clone()
+                    .send(connection)
+                    .map(|_| ())
+                    .map_err(|err| warn!("Unable to forward new UDP connection: {}", err));
                 socket.read().handle.spawn(task);
             }
             Ok(Async::Ready(Some(())))
@@ -98,7 +93,9 @@ impl SharedSocket {
     }
 
     pub fn incoming(&self) -> impl Stream<Item = Connection, Error = ()> {
-        IncomingUdpConnections { socket: self.clone() }
+        IncomingUdpConnections {
+            socket: self.clone(),
+        }
     }
 
     pub fn connect(&self, addr: SocketAddr) -> Result<Connection> {
@@ -110,20 +107,20 @@ impl SharedSocket {
     fn forward_or_new_connection(&self, buf: &[u8], remote: SocketAddr) -> Option<Connection> {
         let mut socket = self.write();
         if let Some(destination) = socket.connections.get(&remote) {
-            let task = destination.clone().send(buf.into()).map(|_| ()).map_err(
-                |_| {
-                    println!("Error when forwarding datagram")
-                },
-            );
+            let task = destination
+                .clone()
+                .send(buf.into())
+                .map(|_| ())
+                .map_err(|_| println!("Error when forwarding datagram"));
             socket.handle.spawn(task);
             return None;
         }
         let (destination, source) = channel::<Vec<u8>>(10);
-        let task = destination.clone().send(buf.into()).map(|_| ()).map_err(
-            |_| {
-                println!("Error when forwarding datagram")
-            },
-        );
+        let task = destination
+            .clone()
+            .send(buf.into())
+            .map(|_| ())
+            .map_err(|_| println!("Error when forwarding datagram"));
         socket.handle.spawn(task);
         socket.connections.insert(remote, destination);
         Some(Connection::new(source, remote, self.clone()))
@@ -131,7 +128,7 @@ impl SharedSocket {
 }
 
 struct IncomingUdpConnections {
-    socket: SharedSocket,
+    socket: Shared<Socket>,
 }
 
 impl Stream for IncomingUdpConnections {

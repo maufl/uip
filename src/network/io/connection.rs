@@ -1,22 +1,23 @@
 use tokio_io::{AsyncRead, AsyncWrite};
 use futures::sync::mpsc::Receiver;
-use futures::{Poll, Async, Stream};
+use futures::{Async, Poll, Stream};
 use std::net::SocketAddr;
-use std::io::{Read, Write, Result, Error, ErrorKind};
+use std::io::{Error, ErrorKind, Read, Result, Write};
 
-use network::io::SharedSocket;
+use network::io::Socket;
+use Shared;
 
 pub struct Connection {
     incoming: Receiver<Vec<u8>>,
     remote_addr: SocketAddr,
-    socket: SharedSocket,
+    socket: Shared<Socket>,
 }
 
 impl Connection {
     pub fn new(
         incoming: Receiver<Vec<u8>>,
         remote_addr: SocketAddr,
-        socket: SharedSocket,
+        socket: Shared<Socket>,
     ) -> Connection {
         Connection {
             incoming: incoming,
@@ -36,9 +37,9 @@ impl Connection {
 
 impl Read for Connection {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
-        let async = self.incoming.poll().expect(
-            "Error while polling futures Receiver!",
-        );
+        let async = self.incoming
+            .poll()
+            .expect("Error while polling futures Receiver!");
         match async {
             Async::NotReady => Err(Error::new(ErrorKind::WouldBlock, "no bytes ready")),
             Async::Ready(None) => Err(Error::new(ErrorKind::UnexpectedEof, "end of file")),

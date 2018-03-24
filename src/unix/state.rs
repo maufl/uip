@@ -1,27 +1,26 @@
 use std::collections::HashMap;
-use std::rc::Rc;
-use std::cell::{Ref, RefCell, RefMut};
 use futures::{Async, Future, Poll, Sink, Stream};
 use futures::sync::mpsc::Sender;
-use tokio_core::reactor::Handle;
 use tokio_uds::UnixListener;
+use tokio_core::reactor::Handle;
 use tokio_io::AsyncRead;
 use bytes::BytesMut;
 use std::io;
 use std::path::Path;
 use std::fs;
 
-use Identifier;
+use {Identifier, Shared};
 use unix::{Connection, ControlProtocolCodec, Frame};
 
-struct InnerState {
-    handle: Handle,
+#[derive(Clone)]
+pub struct UnixState {
     pub ctl_socket: String,
+    handle: Handle,
     connections: HashMap<(Identifier, u16, u16), Connection>,
     upstream: Sender<(Identifier, u16, u16, BytesMut)>,
 }
 
-impl Drop for InnerState {
+impl Drop for UnixState {
     fn drop(&mut self) {
         let path = &self.ctl_socket;
         if Path::new(path).exists() {
@@ -30,23 +29,26 @@ impl Drop for InnerState {
     }
 }
 
-#[derive(Clone)]
-pub struct State(Rc<RefCell<InnerState>>);
-
-impl State {
+impl UnixState {
     pub fn new(
-        handle: Handle,
         ctl_socket: String,
+        handle: Handle,
         upstream: Sender<(Identifier, u16, u16, BytesMut)>,
-    ) -> State {
-        State(Rc::new(RefCell::new(InnerState {
-            handle: handle,
+    ) -> UnixState {
+        UnixState {
             ctl_socket: ctl_socket,
+            handle: handle,
             connections: HashMap::new(),
             upstream: upstream,
-        })))
+        }
     }
 
+    pub fn shared(self) -> Shared<UnixState> {
+        Shared::new(self)
+    }
+}
+
+impl Shared<UnixState> {
     pub fn ctl_socket(&self) -> String {
         self.read().ctl_socket.clone()
     }
@@ -99,22 +101,6 @@ impl State {
         self.spawn(done);
     }
 
-    fn read(&self) -> Ref<InnerState> {
-        self.0.borrow()
-    }
-
-    fn write(&self) -> RefMut<InnerState> {
-        self.0.borrow_mut()
-    }
-
-    pub fn spawn<F: Future<Item = (), Error = ()> + 'static>(&self, f: F) {
-        self.read().handle.spawn(f)
-    }
-
-    pub fn handle(&self) -> Handle {
-        self.read().handle.clone()
-    }
-
     pub fn send_frame(&self, host_id: Identifier, src_port: u16, dst_port: u16, data: BytesMut) {
         let task = self.read()
             .upstream
@@ -123,6 +109,10 @@ impl State {
             .map(|_| ())
             .map_err(|err| warn!("Failed to pass message to upstream: {}", err));
         self.spawn(task);
+    }
+
+    pub fn spawn<F: Future<Item = (), Error = ()> + 'static>(&self, f: F) {
+        self.read().handle.spawn(f)
     }
 
     pub fn deliver_frame(&self, host_id: Identifier, src_port: u16, dst_port: u16, data: BytesMut) {
@@ -136,7 +126,7 @@ impl State {
     }
 }
 
-impl Future for State {
+impl Future for Shared<UnixState> {
     type Item = ();
     type Error = ();
 
