@@ -1,13 +1,16 @@
 use std::collections::HashMap;
 use futures::{Async, Future, Poll, Sink, Stream};
 use futures::sync::mpsc::Sender;
-use tokio_uds::UnixListener;
+use tokio_uds::{UnixListener, UnixStream};
 use tokio_core::reactor::Handle;
 use tokio_io::AsyncRead;
+use tokio_io::codec::Framed;
 use bytes::BytesMut;
 use std::io;
 use std::path::Path;
 use std::fs;
+use rand::{thread_rng, Rng};
+use std::u16;
 
 use {Identifier, Shared};
 use unix::{Connection, ControlProtocolCodec, Frame};
@@ -61,44 +64,56 @@ impl Shared<UnixState> {
         let done = UnixListener::bind(&self.read().ctl_socket, &self.read().handle)
             .expect("Unable to open unix control socket")
             .incoming()
-            .for_each(move |(stream, _addr)| {
-                let state = state.clone();
-                let socket = stream.framed(ControlProtocolCodec);
-                let src_port = 1u16;
-                socket
-                    .into_future()
-                    .and_then(move |(frame, socket)| {
-                        let (host_id, dst_port) = match frame {
-                            Some(Frame::Connect(host_id, dst_port)) => (host_id, dst_port),
-                            _ => {
-                                return Err((
-                                    io::Error::new(io::ErrorKind::Other, "Unexpected message"),
-                                    socket,
-                                ))
-                            }
-                        };
-                        let connection = Connection::from_unix_socket(
-                            state.clone(),
-                            socket,
-                            host_id,
-                            src_port,
-                            dst_port,
-                        );
-                        state
-                            .write()
-                            .connections
-                            .insert((host_id, src_port, dst_port), connection);
-                        Ok(())
-                    })
-                    .then(|result| {
-                        if let Err(err) = result {
-                            println!("Error in unix stream: {}", err.0);
-                        }
-                        Ok(())
-                    })
-            })
+            .for_each(move |(stream, _addr)| state.handle_new_stream(stream))
             .map_err(|e| println!("Control socket was closed: {}", e));
         self.spawn(done);
+    }
+
+    pub fn handle_new_stream(
+        &self,
+        connection: UnixStream,
+    ) -> impl Future<Item = (), Error = io::Error> {
+        let state = self.clone();
+        let socket = connection.framed(ControlProtocolCodec);
+        socket
+            .into_future()
+            .and_then(move |(frame, socket)| match frame {
+                Some(Frame::Connect(host_id, dst_port)) => {
+                    state.stream_connect(socket, host_id, dst_port);
+                    Ok(())
+                }
+                _ => {
+                    return Err((
+                        io::Error::new(io::ErrorKind::Other, "Unexpected message"),
+                        socket,
+                    ))
+                }
+            })
+            .then(|result| {
+                if let Err(err) = result {
+                    warn!("Error in unix stream: {}", err.0);
+                }
+                Ok(())
+            })
+    }
+
+    pub fn stream_connect(
+        &self,
+        connection: Framed<UnixStream, ControlProtocolCodec>,
+        host_id: Identifier,
+        dst_port: u16,
+    ) {
+        let used_ports = self.used_ports();
+        let mut rng = thread_rng();
+        let mut src_port: u16 = rng.gen_range(1024, u16::MAX);
+        while used_ports.contains(&src_port) {
+            src_port = rng.gen_range(1024, u16::MAX);
+        }
+        let connection =
+            Connection::from_unix_socket(self.clone(), connection, host_id, src_port, dst_port);
+        self.write()
+            .connections
+            .insert((host_id, src_port, dst_port), connection);
     }
 
     pub fn send_frame(&self, host_id: Identifier, src_port: u16, dst_port: u16, data: BytesMut) {
@@ -109,6 +124,14 @@ impl Shared<UnixState> {
             .map(|_| ())
             .map_err(|err| warn!("Failed to pass message to upstream: {}", err));
         self.spawn(task);
+    }
+
+    pub fn used_ports(&self) -> Vec<u16> {
+        self.read()
+            .connections
+            .keys()
+            .map(|&(_host_id, src_port, _dst_port)| src_port)
+            .collect()
     }
 
     pub fn spawn<F: Future<Item = (), Error = ()> + 'static>(&self, f: F) {

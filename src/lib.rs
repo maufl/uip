@@ -13,6 +13,7 @@ extern crate log;
 extern crate mio;
 extern crate nix;
 extern crate openssl;
+extern crate rand;
 extern crate rmp_serde;
 extern crate serde;
 #[macro_use]
