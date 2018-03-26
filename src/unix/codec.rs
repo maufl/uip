@@ -9,7 +9,9 @@ use Identifier;
 pub enum Frame {
     Connect(Identifier, u16),
     Data(Vec<u8>),
-    //Accept(Identifier, u16),
+    Listen(u16),
+    IncomingConnection(Identifier, u16),
+    Accept(Identifier, u16, u16),
 }
 
 pub struct ControlProtocolCodec;

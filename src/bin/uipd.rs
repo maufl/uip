@@ -6,7 +6,6 @@ extern crate futures;
 extern crate log;
 extern crate serde_json;
 extern crate tokio_core;
-extern crate tokio_file_unix;
 extern crate tokio_io;
 extern crate tokio_signal;
 

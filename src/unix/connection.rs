@@ -37,7 +37,7 @@ impl Connection {
                     Frame::Data(buf) => {
                         state2.send_frame(host_id, src_port, dst_port, BytesMut::from(buf))
                     }
-                    Frame::Connect(_, _) => warn!("Unexpected UNIX message CONNECT"),
+                    _ => warn!("Unexpected Unix message {:?}", frame),
                 };
                 future::ok(())
             })

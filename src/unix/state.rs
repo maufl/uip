@@ -1,16 +1,18 @@
 use std::collections::HashMap;
 use futures::{Async, Future, Poll, Sink, Stream};
-use futures::sync::mpsc::Sender;
+use futures::sync::mpsc::{channel, Sender};
 use tokio_uds::{UnixListener, UnixStream};
 use tokio_core::reactor::Handle;
 use tokio_io::AsyncRead;
 use tokio_io::codec::Framed;
+use tokio_core::reactor::Timeout;
 use bytes::BytesMut;
-use std::io;
+use std::io::{Error, ErrorKind};
 use std::path::Path;
 use std::fs;
 use rand::{thread_rng, Rng};
 use std::u16;
+use std::time::Duration;
 
 use {Identifier, Shared};
 use unix::{Connection, ControlProtocolCodec, Frame};
@@ -20,6 +22,7 @@ pub struct UnixState {
     pub ctl_socket: String,
     handle: Handle,
     connections: HashMap<(Identifier, u16, u16), Connection>,
+    listeners: HashMap<u16, Sender<Frame>>,
     upstream: Sender<(Identifier, u16, u16, BytesMut)>,
 }
 
@@ -42,6 +45,7 @@ impl UnixState {
             ctl_socket: ctl_socket,
             handle: handle,
             connections: HashMap::new(),
+            listeners: HashMap::new(),
             upstream: upstream,
         }
     }
@@ -72,7 +76,7 @@ impl Shared<UnixState> {
     pub fn handle_new_stream(
         &self,
         connection: UnixStream,
-    ) -> impl Future<Item = (), Error = io::Error> {
+    ) -> impl Future<Item = (), Error = Error> {
         let state = self.clone();
         let socket = connection.framed(ControlProtocolCodec);
         socket
@@ -82,12 +86,15 @@ impl Shared<UnixState> {
                     state.stream_connect(socket, host_id, dst_port);
                     Ok(())
                 }
-                _ => {
-                    return Err((
-                        io::Error::new(io::ErrorKind::Other, "Unexpected message"),
-                        socket,
-                    ))
+                Some(Frame::Accept(host_id, src_port, dst_port)) => {
+                    state.stream_accept(socket, host_id, src_port, dst_port);
+                    Ok(())
                 }
+                Some(Frame::Listen(src_port)) => {
+                    state.stream_listen(socket, src_port);
+                    Ok(())
+                }
+                _ => return Err((Error::new(ErrorKind::Other, "Unexpected message"), socket)),
             })
             .then(|result| {
                 if let Err(err) = result {
@@ -114,6 +121,39 @@ impl Shared<UnixState> {
         self.write()
             .connections
             .insert((host_id, src_port, dst_port), connection);
+    }
+
+    pub fn stream_accept(
+        &self,
+        connection: Framed<UnixStream, ControlProtocolCodec>,
+        host_id: Identifier,
+        src_port: u16,
+        dst_port: u16,
+    ) {
+        let connection =
+            Connection::from_unix_socket(self.clone(), connection, host_id, src_port, dst_port);
+        self.write()
+            .connections
+            .insert((host_id, src_port, dst_port), connection);
+    }
+
+    pub fn stream_listen(
+        &self,
+        connection: Framed<UnixStream, ControlProtocolCodec>,
+        src_port: u16,
+    ) {
+        let (unix_sink, _unix_stream) = connection.split();
+        let (sender, receiver) = channel::<Frame>(10);
+        self.spawn(
+            receiver
+                .forward(
+                    unix_sink
+                        .sink_map_err(|err| warn!("Sink error for Unix listening socket: {}", err)),
+                )
+                .map(|_| ())
+                .map_err(|_| warn!("Forwarding error for Unix listening socket.")),
+        );
+        self.write().listeners.insert(src_port, sender);
     }
 
     pub fn send_frame(&self, host_id: Identifier, src_port: u16, dst_port: u16, data: BytesMut) {
@@ -144,7 +184,29 @@ impl Shared<UnixState> {
             host_id, src_port, dst_port, data
         );
         if let Some(socket) = self.read().connections.get(&(host_id, src_port, dst_port)) {
-            self.spawn(socket.send_frame(data).map(|_| ()).map_err(|_| ()));
+            return self.spawn(socket.send_frame(data).map(|_| ()).map_err(|_| ()));
+        }
+        if let Some(listener) = self.read().listeners.get(&dst_port) {
+            let notify_listener = listener
+                .clone()
+                .send(Frame::IncomingConnection(host_id, src_port))
+                .map(|_| ())
+                .map_err(|err| {
+                    warn!(
+                        "Unable to notify Unix listener about new connection: {}",
+                        err
+                    )
+                });
+            self.spawn(notify_listener);
+            let state = self.clone();
+            let resend = Timeout::new(Duration::new(0, 200 * 1000 * 1000), &self.read().handle)
+                .expect("Unable to initialize timeout")
+                .map_err(|err| warn!("Timeout error: {}", err))
+                .map(move |_| {
+                    state.deliver_frame(host_id, src_port, dst_port, data);
+                })
+                .map(|_| ());
+            return self.spawn(resend);
         }
     }
 }
