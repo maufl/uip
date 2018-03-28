@@ -94,7 +94,8 @@ impl Shared<NetworkState> {
             .collect();
         for address in stale {
             info!("Closing stale socket {}", address);
-            if let Some(_socket) = self.write().sockets.remove(&address) {
+            if let Some(socket) = self.write().sockets.remove(&address) {
+                socket.close();
                 info!("Closed socket {}", address);
             } else {
                 info!("No socket found for {}", address);

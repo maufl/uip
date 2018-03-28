@@ -71,6 +71,10 @@ impl Shared<Socket> {
         Ok(socket)
     }
 
+    pub fn close(&self) {
+        self.read().socket.close()
+    }
+
     pub fn get_connection(&self, identifier: &Identifier) -> Option<Connection> {
         self.read().connections.get(identifier).cloned()
     }

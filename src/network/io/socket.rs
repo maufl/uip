@@ -5,7 +5,9 @@ use futures::stream::poll_fn;
 use futures::{Async, Future, Poll, Sink, Stream};
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::io::{ErrorKind, Result};
+use std::io::{Error, ErrorKind, Result};
+use nix;
+use std::os::unix::io::AsRawFd;
 
 use network::LocalAddress;
 use Shared;
@@ -25,10 +27,30 @@ impl Socket {
     }
 }
 
+impl Drop for Socket {
+    fn drop(&mut self) {
+        debug!("IO socket dropped")
+    }
+}
+
+fn nix_error_to_io_error(err: nix::Error) -> Error {
+    match err {
+        nix::Error::Sys(err_no) => Error::from(err_no),
+        _ => Error::new(ErrorKind::Other, err),
+    }
+}
+
 impl Shared<Socket> {
     pub fn bind(addr: LocalAddress, handle: Handle) -> Result<Shared<Socket>> {
-        UdpSocket::bind(&addr.internal, &handle)
-            .and_then(move |socket| Shared::<Socket>::from_socket(socket, addr, handle))
+        let socket = UdpSocket::bind(&addr.internal, &handle)?;
+        if cfg!(unix) {
+            nix::sys::socket::setsockopt(
+                socket.as_raw_fd(),
+                nix::sys::socket::sockopt::ReusePort,
+                &true,
+            ).map_err(nix_error_to_io_error)?;
+        }
+        Shared::<Socket>::from_socket(socket, addr, handle)
     }
 
     pub fn from_socket(
@@ -46,6 +68,10 @@ impl Shared<Socket> {
         }.shared();
         socket.listen(sender);
         Ok(socket)
+    }
+
+    pub fn close(&self) {
+        self.write().incoming.close()
     }
 
     fn listen(&self, sender: Sender<Connection>) {
