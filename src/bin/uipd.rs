@@ -1,6 +1,6 @@
 #![feature(conservative_impl_trait)]
 extern crate clap;
-extern crate env_logger;
+extern crate fern;
 extern crate futures;
 #[macro_use]
 extern crate log;
@@ -22,7 +22,12 @@ use futures::Future;
 use clap::{App, Arg, SubCommand};
 
 fn main() {
-    env_logger::init().unwrap();
+    fern::Dispatch::new()
+        .level_for("uip", log::LevelFilter::Debug)
+        .chain(std::io::stdout())
+        .apply()
+        .expect("Unable to initialize logger");
+
     let matches = app().get_matches();
 
     let mut core = Core::new().unwrap();

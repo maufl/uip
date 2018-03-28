@@ -1,6 +1,6 @@
 #![feature(conservative_impl_trait)]
 extern crate clap;
-extern crate env_logger;
+extern crate fern;
 #[macro_use]
 extern crate log;
 extern crate rmp_serde;
@@ -18,7 +18,12 @@ use uip::unix::Frame;
 use uip::Identifier;
 
 fn main() {
-    env_logger::init().unwrap();
+    fern::Dispatch::new()
+        .level_for("uip", log::LevelFilter::Debug)
+        .chain(std::io::stdout())
+        .apply()
+        .expect("Unable to initialize logger");
+
     let matches = app().get_matches();
 
     let socket_path = matches

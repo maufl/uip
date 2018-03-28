@@ -1,8 +1,9 @@
 #![feature(conservative_impl_trait)]
 extern crate async_readline;
 extern crate bytes;
+extern crate fern;
 extern crate futures;
-extern crate pretty_env_logger;
+extern crate log;
 extern crate serde_json;
 extern crate tokio_core;
 extern crate tokio_signal;
@@ -22,7 +23,11 @@ use std::str::FromStr;
 use bytes::BytesMut;
 
 fn main() {
-    pretty_env_logger::init();
+    fern::Dispatch::new()
+        .level_for("uip", log::LevelFilter::Debug)
+        .chain(std::io::stdout())
+        .apply()
+        .expect("Unable to initialize logger");
 
     let mut core = Core::new().unwrap();
 
