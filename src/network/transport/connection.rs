@@ -1,9 +1,11 @@
 use tokio_io::{AsyncRead, AsyncWrite};
 use tokio_core::reactor::Handle;
+use tokio_timer::Timer;
 use futures::{Future, Sink, Stream};
 use futures::sync::mpsc::{channel, SendError, Sender};
 use tokio_openssl::SslStream;
 use bytes::BytesMut;
+use std::time::Duration;
 
 use super::codec::{Codec, Frame};
 use data::Peer;
@@ -33,11 +35,19 @@ impl Connection {
             .forward(sink.sink_map_err(|err| println!("Unexpected sink error: {}", err)))
             .map(|_| ());
         handle.spawn(task);
+        let conn = Connection {
+            handle: handle.clone(),
+            sink: sender,
+        };
+        let conn2 = conn.clone();
         let task = stream
             .for_each(move |frame| {
                 match frame {
-                    Frame::Ping => println!("Ping"),
-                    Frame::Pong => println!("Pong"),
+                    Frame::Ping => {
+                        debug!("Received ping from {}", remote_id);
+                        conn2.send_frame(Frame::Pong);
+                    }
+                    Frame::Pong => debug!("Received pong from {}", remote_id),
                     Frame::Data {
                         src_port,
                         dst_port,
@@ -48,10 +58,25 @@ impl Connection {
             })
             .map_err(|err| warn!("Error while receiving frame: {}", err));
         handle.spawn(task);
-        Connection {
-            handle: handle,
-            sink: sender,
-        }
+        let conn2 = conn.clone();
+        let task = Timer::default()
+            .interval(Duration::from_secs(15))
+            .map_err(|err| {
+                warn!(
+                    "Heartbeat timer of connection encountered an error: {}",
+                    err
+                )
+            })
+            .for_each(move |_| {
+                conn2
+                    .sink
+                    .clone()
+                    .send(Frame::Ping)
+                    .map(|_| ())
+                    .map_err(|_| debug!("Heartbeat ended because connection went away"))
+            });
+        handle.spawn(task);
+        conn
     }
 
     pub fn send_frame(&self, f: Frame) {

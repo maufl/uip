@@ -21,6 +21,7 @@ extern crate serde_derive;
 extern crate tokio_core;
 extern crate tokio_io;
 extern crate tokio_openssl;
+extern crate tokio_timer;
 extern crate tokio_uds;
 
 mod data;

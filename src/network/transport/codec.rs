@@ -49,8 +49,14 @@ impl Decoder for Codec {
             None => return Ok(None),
         };
         match typ {
-            1 => return Ok(Some(Frame::Ping)),
-            2 => return Ok(Some(Frame::Pong)),
+            1 => {
+                src.split_to(1);
+                return Ok(Some(Frame::Ping));
+            }
+            2 => {
+                src.split_to(1);
+                return Ok(Some(Frame::Pong));
+            }
             3 => {}
             _ => return Err(Error::new(ErrorKind::InvalidData, "invalid message type")),
         };
