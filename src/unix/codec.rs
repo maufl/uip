@@ -21,13 +21,23 @@ impl Decoder for ControlProtocolCodec {
     type Error = Error;
 
     fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Frame>> {
+        if buf.len() < 1 {
+            return Ok(None);
+        }
         debug!("Decoding UNIX message: {:?}", buf);
-        from_slice(&buf).map(|frame| Some(frame)).map_err(|err| {
+        let frame: Frame = from_slice(&buf).map_err(|err| {
             Error::new(
                 ErrorKind::Other,
                 format!("Error while decoding message: {}", err),
             )
-        })
+        })?;
+        // FIXME: This is an ugly and slow workaround
+        let mut tmp = Vec::new();
+        frame
+            .serialize(&mut Serializer::new(&mut tmp))
+            .expect("Error reserializing parsed frame");
+        buf.split_to(tmp.len());
+        Ok(Some(frame))
     }
 }
 

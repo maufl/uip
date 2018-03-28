@@ -212,7 +212,9 @@ impl Shared<NetworkState> {
     ) -> impl Future<Item = TransportConnection, Error = io::Error> {
         self.read()
             .sockets
-            .values()
+            .iter()
+            .filter(|&(addr, _socket)| addr.is_ipv4() == address.is_ipv4())
+            .map(|(_addr, socket)| socket)
             .next()
             .cloned()
             .ok_or_else(|| {
@@ -291,6 +293,7 @@ impl Shared<NetworkState> {
                 connection
                     .send_data_frame(src_port, dst_port, data)
                     .map_err(|_| {
+                        // FIXME: At this point, the connection must be removed
                         io::Error::new(io::ErrorKind::BrokenPipe, "unable to forward frame")
                     })
             })

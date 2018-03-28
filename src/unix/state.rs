@@ -83,14 +83,20 @@ impl Shared<UnixState> {
             .into_future()
             .and_then(move |(frame, socket)| match frame {
                 Some(Frame::Connect(host_id, dst_port)) => {
+                    debug!(
+                        "Received a connect message for {} to port {}",
+                        host_id, dst_port
+                    );
                     state.stream_connect(socket, host_id, dst_port);
                     Ok(())
                 }
-                Some(Frame::Accept(host_id, src_port, dst_port)) => {
-                    state.stream_accept(socket, host_id, src_port, dst_port);
+                Some(Frame::Accept(host_id, local_port, remote_port)) => {
+                    debug!("Received a accept message for connection from {} port {} on listening port {}", host_id, remote_port, local_port);
+                    state.stream_accept(socket, host_id, local_port, remote_port);
                     Ok(())
                 }
                 Some(Frame::Listen(src_port)) => {
+                    debug!("Received a listen message for port {}", src_port);
                     state.stream_listen(socket, src_port);
                     Ok(())
                 }
@@ -127,14 +133,19 @@ impl Shared<UnixState> {
         &self,
         connection: Framed<UnixStream, ControlProtocolCodec>,
         host_id: Identifier,
-        src_port: u16,
-        dst_port: u16,
+        local_port: u16,
+        remote_port: u16,
     ) {
-        let connection =
-            Connection::from_unix_socket(self.clone(), connection, host_id, src_port, dst_port);
+        let connection = Connection::from_unix_socket(
+            self.clone(),
+            connection,
+            host_id,
+            local_port,
+            remote_port,
+        );
         self.write()
             .connections
-            .insert((host_id, src_port, dst_port), connection);
+            .insert((host_id, local_port, remote_port), connection);
     }
 
     pub fn stream_listen(
@@ -178,24 +189,40 @@ impl Shared<UnixState> {
         self.read().handle.spawn(f)
     }
 
-    pub fn deliver_frame(&self, host_id: Identifier, src_port: u16, dst_port: u16, data: BytesMut) {
+    pub fn deliver_frame(
+        &self,
+        host_id: Identifier,
+        remote_port: u16,
+        local_port: u16,
+        data: BytesMut,
+    ) {
         debug!(
-            "Received new data from {}:{} in to {} {:?}",
-            host_id, src_port, dst_port, data
+            "Received new data from {}:{} to port {} {:?}",
+            host_id, remote_port, local_port, data
         );
-        if let Some(socket) = self.read().connections.get(&(host_id, src_port, dst_port)) {
-            return self.spawn(socket.send_frame(data).map(|_| ()).map_err(|_| ()));
+        if let Some(socket) = self.read()
+            .connections
+            .get(&(host_id, local_port, remote_port))
+        {
+            return self.spawn(
+                socket
+                    .send_frame(data)
+                    .map(|_| ())
+                    .map_err(|err| warn!("Unable to deliver frame locally: {}", err)),
+            );
         }
-        if let Some(listener) = self.read().listeners.get(&dst_port) {
+        if let Some(listener) = self.read().listeners.get(&local_port) {
+            let state = self.clone();
             let notify_listener = listener
                 .clone()
-                .send(Frame::IncomingConnection(host_id, src_port))
+                .send(Frame::IncomingConnection(host_id, remote_port))
                 .map(|_| ())
-                .map_err(|err| {
+                .map_err(move |err| {
                     warn!(
                         "Unable to notify Unix listener about new connection: {}",
                         err
-                    )
+                    );
+                    state.write().listeners.remove(&local_port);
                 });
             self.spawn(notify_listener);
             let state = self.clone();
@@ -203,7 +230,7 @@ impl Shared<UnixState> {
                 .expect("Unable to initialize timeout")
                 .map_err(|err| warn!("Timeout error: {}", err))
                 .map(move |_| {
-                    state.deliver_frame(host_id, src_port, dst_port, data);
+                    state.deliver_frame(host_id, remote_port, local_port, data);
                 })
                 .map(|_| ());
             return self.spawn(resend);

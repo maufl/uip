@@ -46,7 +46,7 @@ impl Connection {
                 };
                 Ok(())
             })
-            .map_err(|err| println!("Error while receiving frame: {}", err));
+            .map_err(|err| warn!("Error while receiving frame: {}", err));
         handle.spawn(task);
         Connection {
             handle: handle,

@@ -24,7 +24,7 @@ extern crate tokio_openssl;
 extern crate tokio_uds;
 
 mod data;
-mod unix;
+pub mod unix;
 mod configuration;
 mod state;
 mod network;

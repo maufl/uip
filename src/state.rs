@@ -125,6 +125,7 @@ impl Future for Shared<State> {
     type Error = ();
 
     fn poll(&mut self) -> Poll<(), ()> {
-        self.write().network.poll()
+        self.write().network.poll();
+        self.write().unix.poll()
     }
 }

@@ -53,7 +53,7 @@ impl Connection {
         &self,
         data: BytesMut,
     ) -> impl Future<Item = Sender<Frame>, Error = SendError<Frame>> {
-        println!("Sending frame");
+        debug!("Sending data frame on Unix connection");
         self.sink.clone().send(Frame::Data(data.to_vec()))
     }
 }
