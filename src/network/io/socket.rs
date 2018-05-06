@@ -19,6 +19,7 @@ pub struct Socket {
     handle: Handle,
     incoming: Receiver<Connection>,
     address: LocalAddress,
+    closed: bool,
 }
 
 impl Socket {
@@ -65,12 +66,17 @@ impl Shared<Socket> {
             handle: handle,
             incoming: receiver,
             address: address,
+            closed: false,
         }.shared();
         socket.listen(sender);
         Ok(socket)
     }
 
     pub fn close(&self) {
+        self.write().closed = true;
+        for (_, sender) in self.write().connections.iter_mut() {
+            sender.close();
+        }
         self.write().incoming.close()
     }
 
@@ -111,10 +117,16 @@ impl Shared<Socket> {
     }
 
     pub fn send_to(&self, buf: &[u8], remote: &SocketAddr) -> Result<usize> {
+        if (self.read().closed) {
+            return Err(Error::new(ErrorKind::UnexpectedEof, "Socket was closed"));
+        }
         self.write().inner.send_to(buf, remote)
     }
 
     pub fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr)> {
+        if (self.read().closed) {
+            return Err(Error::new(ErrorKind::UnexpectedEof, "Socket was closed"));
+        }
         self.write().inner.recv_from(buf)
     }
 

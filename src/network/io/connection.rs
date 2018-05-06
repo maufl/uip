@@ -33,6 +33,10 @@ impl Connection {
     pub fn local_addr(&self) -> Result<SocketAddr> {
         self.socket.local_addr()
     }
+
+    pub fn close(&mut self) {
+        self.incoming.close()
+    }
 }
 
 impl Read for Connection {
