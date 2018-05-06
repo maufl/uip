@@ -1,4 +1,3 @@
-#![feature(conservative_impl_trait)]
 #![feature(ip)]
 #![feature(nll)]
 

@@ -1,4 +1,3 @@
-#![feature(conservative_impl_trait)]
 extern crate async_readline;
 extern crate bytes;
 extern crate fern;

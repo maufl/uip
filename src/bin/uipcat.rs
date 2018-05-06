@@ -1,4 +1,3 @@
-#![feature(conservative_impl_trait)]
 extern crate clap;
 extern crate fern;
 #[macro_use]
