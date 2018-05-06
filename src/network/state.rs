@@ -85,7 +85,7 @@ impl Shared<NetworkState> {
             .sockets
             .keys()
             .filter(|address| {
-                current_addresses
+                !current_addresses
                     .iter()
                     .map(|addr| addr.internal)
                     .any(|addr| &addr == *address)
