@@ -1,5 +1,6 @@
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
+#[derive(Debug)]
 pub struct Shared<T> {
     inner: Arc<RwLock<T>>,
 }

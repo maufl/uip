@@ -1,11 +1,11 @@
-use openssl::pkey::PKey;
+use openssl::pkey::{HasPublic, PKey};
 use openssl::x509::X509;
 use openssl::error::ErrorStack;
 use openssl::sha::sha256;
 use std::fmt;
 use std::str::FromStr;
 use std::default::Default;
-use serde::{Serialize, Deserialize, Serializer, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde::de::{Error, Unexpected};
 
 const IDENTIFIER_LENGTH: usize = 32;
@@ -19,7 +19,10 @@ impl Identifier {
         Identifier::from_public_key(&pub_key)
     }
 
-    pub fn from_public_key(key: &PKey) -> Result<Identifier, ErrorStack> {
+    pub fn from_public_key<K>(key: &PKey<K>) -> Result<Identifier, ErrorStack>
+    where
+        K: HasPublic,
+    {
         let pub_key_der = key.public_key_to_der()?;
         let identifier = sha256(&pub_key_der);
         Ok(Identifier(identifier))
@@ -56,9 +59,8 @@ impl FromStr for Identifier {
         }
         let mut ident = [0u8; 32];
         for i in 0..32 {
-            ident[i] = u8::from_str_radix(&string[i * 2..i * 2 + 2], 16).map_err(
-                |_err| "Invalid characters in string",
-            )?;
+            ident[i] = u8::from_str_radix(&string[i * 2..i * 2 + 2], 16)
+                .map_err(|_err| "Invalid characters in string")?;
         }
         Ok(Identifier(ident))
     }
@@ -93,14 +95,12 @@ impl<'de> Deserialize<'de> for Identifier {
         }
         let mut ident = [0u8; IDENTIFIER_LENGTH];
         for i in 0..IDENTIFIER_LENGTH {
-            ident[i] = u8::from_str_radix(&string[i * 2..i * 2 + 2], 16).map_err(
-                |_err| {
-                    D::Error::invalid_value(
-                        Unexpected::Str(&string[i * 2..i * 2 + 2]),
-                        &"a valid hex value",
-                    )
-                },
-            )?;
+            ident[i] = u8::from_str_radix(&string[i * 2..i * 2 + 2], 16).map_err(|_err| {
+                D::Error::invalid_value(
+                    Unexpected::Str(&string[i * 2..i * 2 + 2]),
+                    &"a valid hex value",
+                )
+            })?;
         }
         Ok(Identifier(ident))
     }

@@ -2,8 +2,9 @@ use futures::{Future, Sink, Stream};
 use futures::future;
 use futures::sync::mpsc::{channel, SendError, Sender};
 use bytes::BytesMut;
-use tokio_uds::UnixStream;
-use tokio_io::codec::Framed;
+use tokio::net::UnixStream;
+use tokio::codec::Framed;
+use tokio;
 
 use unix::{ControlProtocolCodec, Frame, UnixState};
 use {Identifier, Shared};
@@ -24,7 +25,7 @@ impl Connection {
     ) -> Connection {
         let (sink, stream) = socket.split();
         let (sender, receiver) = channel::<Frame>(10);
-        state.spawn(
+        tokio::spawn(
             receiver
                 .forward(sink.sink_map_err(|err| warn!("Sink error: {}", err)))
                 .map(|_| ())
@@ -42,7 +43,7 @@ impl Connection {
                 future::ok(())
             })
             .map_err(|err| warn!("Unix stream error: {}", err));
-        state.spawn(done);
+        tokio::spawn(done);
         Connection {
             state: state,
             sink: sender,

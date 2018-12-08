@@ -1,9 +1,9 @@
 use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 use std::collections::HashMap;
-use futures::{Async, Future, IntoFuture, Poll, Sink, Stream};
+use tokio;
+use tokio::prelude::*;
 use futures::sync::mpsc::Sender;
-use tokio_core::reactor::Handle;
 use bytes::BytesMut;
 use std::io;
 
@@ -21,7 +21,6 @@ pub struct NetworkState {
     pub pib: PeerInformationBase,
     pub relays: Vec<Identifier>,
     pub port: u16,
-    handle: Handle,
     upstream: Sender<(Identifier, u16, u16, BytesMut)>,
     sockets: HashMap<SocketAddr, Shared<Socket>>,
 }
@@ -32,7 +31,6 @@ impl NetworkState {
         pib: PeerInformationBase,
         relays: Vec<Identifier>,
         port: u16,
-        handle: Handle,
         upstream: Sender<(Identifier, u16, u16, BytesMut)>,
     ) -> NetworkState {
         NetworkState {
@@ -40,7 +38,6 @@ impl NetworkState {
             pib: pib,
             relays: relays,
             port: port,
-            handle: handle,
             upstream: upstream,
             sockets: HashMap::new(),
         }
@@ -52,10 +49,6 @@ impl NetworkState {
 }
 
 impl Shared<NetworkState> {
-    pub fn spawn<F: Future<Item = (), Error = ()> + 'static>(&self, f: F) {
-        self.read().handle.spawn(f)
-    }
-
     fn open_new_sockets(&self) {
         let mut addresses = match discover_addresses() {
             Ok(a) => a,
@@ -130,11 +123,13 @@ impl Shared<NetworkState> {
 
     fn open_socket(&self, address: LocalAddress) -> io::Result<()> {
         debug!("Opening new socket on address {:?}", address);
+        let state = self.clone();
         let socket = Shared::<Socket>::open(
             address,
-            &self.read().handle,
             self.read().id.clone(),
-            self.clone(),
+            move |identifier: Identifier, src_port: u16, dst_port: u16, data: BytesMut| {
+                state.deliver_frame(identifier, src_port, dst_port, data)
+            },
         )?;
         self.write()
             .sockets
@@ -145,7 +140,7 @@ impl Shared<NetworkState> {
 
     fn observe_network_changes(&self) {
         let state = self.clone();
-        let listener = match Listener::new(&self.read().handle) {
+        let listener = match Listener::new() {
             Ok(l) => l,
             Err(err) => return warn!("Unable to listen for network changes: {}", err),
         };
@@ -157,7 +152,7 @@ impl Shared<NetworkState> {
                 Ok(())
             })
             .map_err(|err| warn!("Error while listening for network changes: {}", err));
-        self.spawn(task);
+        tokio::spawn(task);
     }
 
     pub fn add_relay(&mut self, id: Identifier) {
@@ -189,7 +184,7 @@ impl Shared<NetworkState> {
                     Ok(())
                 })
                 .map_err(move |err| warn!("Unable to connect to peer {}: {}", relay, err));
-            self.spawn(future);
+            tokio::spawn(future);
         }
     }
 
@@ -235,7 +230,7 @@ impl Shared<NetworkState> {
             .send((host_id, src_port, dst_port, data))
             .map(|_| ())
             .map_err(|err| warn!("Failed to pass message to upstream: {}", err));
-        self.spawn(task);
+        tokio::spawn(task);
     }
 
     pub fn process_control_message(&self, host_id: Identifier, data: BytesMut) {
@@ -261,7 +256,7 @@ impl Shared<NetworkState> {
                         Ok(())
                     })
                     .map_err(|err| warn!("Unable to respond with peer information: {}", err));
-                self.spawn(task);
+                tokio::spawn(task);
             }
             Message::Invalid(_) => warn!("Received invalid control message from peer {}", host_id),
         }
@@ -285,7 +280,7 @@ impl Shared<NetworkState> {
                     id, relay, err
                 )
             });
-        self.spawn(task);
+        tokio::spawn(task);
     }
 
     pub fn send_frame(&self, host_id: Identifier, src_port: u16, dst_port: u16, data: BytesMut) {
@@ -300,7 +295,7 @@ impl Shared<NetworkState> {
             })
             .map(|_| {})
             .map_err(|err| warn!("Error while sending frame: {}", err));
-        self.spawn(task);
+        tokio::spawn(task);
     }
 
     pub fn get_connection(

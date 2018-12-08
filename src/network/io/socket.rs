@@ -1,5 +1,5 @@
-use tokio_core::net::UdpSocket;
-use tokio_core::reactor::Handle;
+use tokio;
+use tokio::net::UdpSocket;
 use futures::sync::mpsc::{channel, Receiver, Sender};
 use futures::stream::poll_fn;
 use futures::{Async, Future, Poll, Sink, Stream};
@@ -13,10 +13,10 @@ use network::LocalAddress;
 use Shared;
 use super::Connection;
 
+#[derive(Debug)]
 pub struct Socket {
     inner: UdpSocket,
     connections: HashMap<SocketAddr, Sender<Vec<u8>>>,
-    handle: Handle,
     incoming: Receiver<Connection>,
     address: LocalAddress,
     closed: bool,
@@ -42,8 +42,8 @@ fn nix_error_to_io_error(err: nix::Error) -> Error {
 }
 
 impl Shared<Socket> {
-    pub fn bind(addr: LocalAddress, handle: Handle) -> Result<Shared<Socket>> {
-        let socket = UdpSocket::bind(&addr.internal, &handle)?;
+    pub fn bind(addr: LocalAddress) -> Result<Shared<Socket>> {
+        let socket = UdpSocket::bind(&addr.internal)?;
         if cfg!(unix) {
             nix::sys::socket::setsockopt(
                 socket.as_raw_fd(),
@@ -51,19 +51,14 @@ impl Shared<Socket> {
                 &true,
             ).map_err(nix_error_to_io_error)?;
         }
-        Shared::<Socket>::from_socket(socket, addr, handle)
+        Shared::<Socket>::from_socket(socket, addr)
     }
 
-    pub fn from_socket(
-        sock: UdpSocket,
-        address: LocalAddress,
-        handle: Handle,
-    ) -> Result<Shared<Socket>> {
+    pub fn from_socket(sock: UdpSocket, address: LocalAddress) -> Result<Shared<Socket>> {
         let (sender, receiver) = channel::<Connection>(10);
         let socket = Socket {
             inner: sock,
             connections: HashMap::new(),
-            handle: handle,
             incoming: receiver,
             address: address,
             closed: false,
@@ -104,12 +99,12 @@ impl Shared<Socket> {
                     .send(connection)
                     .map(|_| ())
                     .map_err(|err| warn!("Unable to forward new UDP connection: {}", err));
-                socket.read().handle.spawn(task);
+                tokio::spawn(task);
             }
             Ok(Async::Ready(Some(())))
         }).collect()
             .map(move |_| info!("UDP socket {} was closed", local_address));
-        self.read().handle.spawn(task);
+        tokio::spawn(task);
     }
 
     pub fn local_addr(&self) -> Result<SocketAddr> {
@@ -117,17 +112,25 @@ impl Shared<Socket> {
     }
 
     pub fn send_to(&self, buf: &[u8], remote: &SocketAddr) -> Result<usize> {
-        if (self.read().closed) {
+        if self.read().closed {
             return Err(Error::new(ErrorKind::UnexpectedEof, "Socket was closed"));
         }
-        self.write().inner.send_to(buf, remote)
+        match self.write().inner.poll_send_to(buf, remote) {
+            Ok(Async::Ready(r)) => Ok(r),
+            Ok(Async::NotReady) => Err(Error::new(ErrorKind::WouldBlock, "Operation would block")),
+            Err(e) => Err(e),
+        }
     }
 
     pub fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr)> {
-        if (self.read().closed) {
+        if self.read().closed {
             return Err(Error::new(ErrorKind::UnexpectedEof, "Socket was closed"));
         }
-        self.write().inner.recv_from(buf)
+        match self.write().inner.poll_recv_from(buf) {
+            Ok(Async::Ready(r)) => Ok(r),
+            Ok(Async::NotReady) => Err(Error::new(ErrorKind::WouldBlock, "Operation would block")),
+            Err(e) => Err(e),
+        }
     }
 
     pub fn incoming(&self) -> impl Stream<Item = Connection, Error = ()> {
@@ -150,7 +153,7 @@ impl Shared<Socket> {
                 .send(buf.into())
                 .map(|_| ())
                 .map_err(|_| println!("Error when forwarding datagram"));
-            socket.handle.spawn(task);
+            tokio::spawn(task);
             return None;
         }
         let (destination, source) = channel::<Vec<u8>>(10);
@@ -159,7 +162,7 @@ impl Shared<Socket> {
             .send(buf.into())
             .map(|_| ())
             .map_err(|_| println!("Error when forwarding datagram"));
-        socket.handle.spawn(task);
+        tokio::spawn(task);
         socket.connections.insert(remote, destination);
         Some(Connection::new(source, remote, self.clone()))
     }

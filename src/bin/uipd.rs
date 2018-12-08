@@ -4,8 +4,7 @@ extern crate futures;
 #[macro_use]
 extern crate log;
 extern crate serde_json;
-extern crate tokio_core;
-extern crate tokio_io;
+extern crate tokio;
 extern crate tokio_signal;
 
 extern crate uip;
@@ -13,7 +12,6 @@ extern crate uip;
 use uip::Configuration;
 use uip::{Identity, Shared, State};
 
-use tokio_core::reactor::Core;
 use std::fs::File;
 use std::path::Path;
 use futures::stream::Stream;
@@ -38,13 +36,11 @@ fn main() {
 
     let matches = app().get_matches();
 
-    let mut core = Core::new().unwrap();
-
     let config_file_path = matches.value_of("config").unwrap_or(".server.json");
 
     if Some("generate-config") == matches.subcommand_name() {
         let id = Identity::generate().expect("Unable to generate an ID");
-        let state = Shared::<State>::from_id(id, &core.handle());
+        let state = Shared::<State>::from_id(id);
         return write_configuration(config_file_path, &state.to_configuration())
             .unwrap_or_else(|err| error!("{}", err));
     }
@@ -59,13 +55,12 @@ fn main() {
     if config.port == 0u16 {
         config.port = 0xfe11;
     }
-    let state = Shared::<State>::from_configuration(config, &core.handle());
+    let state = Shared::<State>::from_configuration(config);
 
     println!("Starting client for ID {}", state.read().id.identifier);
-    core.handle().spawn(state.clone());
-    let handle = core.handle();
-    let _ = core.run(
-        tokio_signal::ctrl_c(&handle)
+    tokio::spawn(state.clone());
+    tokio::run(
+        tokio_signal::ctrl_c()
             .flatten_stream()
             .into_future()
             .map(|_| println!("Received CTRL-C"))

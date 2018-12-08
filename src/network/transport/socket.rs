@@ -3,45 +3,44 @@ use std::io;
 use std::error::Error;
 use std::string::ToString;
 use std::net::SocketAddr;
-use openssl::x509::X509;
-use openssl::ssl::{SslAcceptor, SslAcceptorBuilder, SslConnector, SslConnectorBuilder, SslMethod,
-                   SslVerifyMode, SSL_VERIFY_PEER};
-use openssl::stack::Stack;
-use futures::{Future, IntoFuture, Stream};
-use tokio_core::reactor::Handle;
-use tokio_io::{AsyncRead, AsyncWrite};
+use openssl::ssl::{SslAcceptor, SslConnector, SslMethod, SslVerifyMode};
+use bytes::BytesMut;
+use tokio;
+use tokio::prelude::*;
 use tokio_openssl::{SslAcceptorExt, SslConnectorExt, SslStream};
 
 use network::io::Socket as IoSocket;
-use network::{LocalAddress, NetworkState};
+use network::LocalAddress;
 use network::transport::Connection;
 use {Identifier, Identity, Shared};
 use network::discovery::request_external_address;
 
-#[derive(Clone)]
 pub struct Socket {
     id: Identity,
     address: LocalAddress,
     socket: Shared<IoSocket>,
-    handle: Handle,
     pub connections: HashMap<Identifier, Connection>,
-    state: Shared<NetworkState>,
+    //state: Shared<NetworkState>,
+    deliver_frame: Box<Fn(Identifier, u16, u16, BytesMut) + Send + Sync>,
 }
 
 impl Socket {
-    pub fn new(
+    pub fn new<F>(
         socket: Shared<IoSocket>,
         address: LocalAddress,
-        handle: Handle,
-        state: Shared<NetworkState>,
+        deliver_frame: F,
+        //state: Shared<NetworkState>,
         id: Identity,
-    ) -> Socket {
+    ) -> Socket
+    where
+        F: Fn(Identifier, u16, u16, BytesMut) + Send + Sync + 'static,
+    {
         Socket {
             id: id,
             address: address,
             socket: socket,
-            handle: handle,
-            state: state,
+            //state: state,
+            deliver_frame: Box::new(deliver_frame),
             connections: HashMap::new(),
         }
     }
@@ -52,20 +51,16 @@ impl Socket {
 }
 
 impl Shared<Socket> {
-    pub fn open(
+    pub fn open<F>(
         address: LocalAddress,
-        handle: &Handle,
         id: Identity,
-        state: Shared<NetworkState>,
-    ) -> io::Result<Shared<Socket>> {
-        let shared_socket = Shared::<IoSocket>::bind(address, handle.clone())?;
-        let socket = Socket::new(
-            shared_socket.clone(),
-            address,
-            handle.clone(),
-            state.clone(),
-            id,
-        ).shared();
+        deliver_frame: F,
+    ) -> io::Result<Shared<Socket>>
+    where
+        F: Fn(Identifier, u16, u16, BytesMut) + Send + Sync + 'static,
+    {
+        let shared_socket = Shared::<IoSocket>::bind(address)?;
+        let socket = Socket::new(shared_socket.clone(), address, deliver_frame, id).shared();
         socket.listen();
         socket.request_external_address();
         Ok(socket)
@@ -81,24 +76,20 @@ impl Shared<Socket> {
 
     fn listen(&self) {
         let socket = self.clone();
-        let handle = self.read().handle.clone();
-        let network_state = self.read().state.clone();
         let acceptor = acceptor_for_id(&self.read().id);
         let task = self.read().socket.incoming().for_each(move |stream| {
             let socket = socket.clone();
-            let handle = handle.clone();
-            let network_state = network_state.clone();
             acceptor
                 .accept_async(stream)
                 .map_err(|err| err.description().to_string())
                 .and_then(move |connection| {
                     let id = id_from_connection(&connection)?;
+                    let socket2 = socket.clone();
                     let conn = Connection::from_tls_stream(
                         connection,
                         id,
-                        handle,
                         move |id, src_port, dst_port, data| {
-                            network_state.deliver_frame(id, src_port, dst_port, data)
+                            (socket2.read().deliver_frame)(id, src_port, dst_port, data)
                         },
                     );
                     socket.write().connections.insert(id, conn);
@@ -106,7 +97,7 @@ impl Shared<Socket> {
                 })
                 .map_err(|err| warn!("Error while accepting connection: {}", err))
         });
-        self.read().handle.spawn(task);
+        tokio::spawn(task);
     }
 
     pub fn open_connection(
@@ -116,8 +107,7 @@ impl Shared<Socket> {
     ) -> impl Future<Item = Connection, Error = io::Error> {
         let id = &self.read().id;
         let connector = connector_for_id(id);
-        let state = self.read().state.clone();
-        let handle = self.read().handle.clone();
+        let state = self.clone();
         self.read()
             .socket
             .connect(address)
@@ -134,9 +124,8 @@ impl Shared<Socket> {
                 let conn = Connection::from_tls_stream(
                     stream,
                     identifier,
-                    handle,
                     move |id, src_port, dst_port, data| {
-                        state2.deliver_frame(id, src_port, dst_port, data)
+                        (state2.read().deliver_frame)(id, src_port, dst_port, data)
                     },
                 );
                 Ok(conn)
@@ -149,10 +138,10 @@ impl Shared<Socket> {
             SocketAddr::V4(addr) => addr,
             _ => return,
         };
-        let task = request_external_address(internal, &self.read().handle)
+        let task = request_external_address(internal)
             .map(move |external| socket.write().address.external = Some(SocketAddr::V4(external)))
             .map_err(|err| warn!("Unable to request external address: {}", err));
-        self.read().handle.spawn(task);
+        tokio::spawn(task);
     }
 
     pub fn public_address(&self) -> Option<SocketAddr> {
@@ -181,14 +170,11 @@ where
 }
 
 fn acceptor_for_id(id: &Identity) -> SslAcceptor {
-    let empty_chain: Stack<X509> = Stack::new().expect("unable to build empty cert chain");
-    let mut builder = SslAcceptorBuilder::mozilla_modern(
-        SslMethod::dtls(),
-        &id.key,
-        id.cert.as_ref(),
-        empty_chain.as_ref(),
-    ).expect("Unable to build new SSL acceptor");
-    builder.set_verify_callback(SSL_VERIFY_PEER, |_valid, context| {
+    let mut builder =
+        SslAcceptor::mozilla_modern(SslMethod::dtls()).expect("Unable to build new SSL acceptor");
+    builder.set_private_key(&id.key);
+    builder.set_certificate(id.cert.as_ref());
+    builder.set_verify_callback(SslVerifyMode::PEER, |_valid, context| {
         context.current_cert().is_some()
     });
     builder.build()
@@ -196,7 +182,7 @@ fn acceptor_for_id(id: &Identity) -> SslAcceptor {
 
 fn connector_for_id(id: &Identity) -> SslConnector {
     let mut builder =
-        SslConnectorBuilder::new(SslMethod::dtls()).expect("Unable to build new SSL connector");
+        SslConnector::builder(SslMethod::dtls()).expect("Unable to build new SSL connector");
     builder.set_verify(SslVerifyMode::empty());
     builder
         .set_certificate(&id.cert)

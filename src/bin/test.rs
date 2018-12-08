@@ -1,7 +1,7 @@
 extern crate fern;
 extern crate igd;
 extern crate log;
-extern crate tokio_core;
+extern crate tokio;
 
 use igd::{search_gateway, PortMappingProtocol};
 

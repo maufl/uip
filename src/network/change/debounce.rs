@@ -1,6 +1,6 @@
-use std::time::{Instant, Duration};
+use std::time::{Duration, Instant};
 
-use futures::{Stream, Poll, Async};
+use futures::prelude::*;
 
 pub struct Debounce<S, I, E>
 where

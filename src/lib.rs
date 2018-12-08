@@ -17,11 +17,8 @@ extern crate rmp_serde;
 extern crate serde;
 #[macro_use]
 extern crate serde_derive;
-extern crate tokio_core;
-extern crate tokio_io;
+extern crate tokio;
 extern crate tokio_openssl;
-extern crate tokio_timer;
-extern crate tokio_uds;
 
 mod data;
 pub mod unix;

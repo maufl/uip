@@ -2,7 +2,7 @@ use std::io::{Error, ErrorKind, Result};
 use serde::Serialize;
 use rmp_serde::{from_slice, Serializer};
 use bytes::BytesMut;
-use tokio_io::codec::{Decoder, Encoder};
+use tokio::codec::{Decoder, Encoder};
 use Identifier;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

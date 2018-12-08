@@ -1,18 +1,18 @@
 use std::collections::HashMap;
-use futures::{Async, Future, Poll, Sink, Stream};
 use futures::sync::mpsc::{channel, Sender};
-use tokio_uds::{UnixListener, UnixStream};
-use tokio_core::reactor::Handle;
-use tokio_io::AsyncRead;
-use tokio_io::codec::Framed;
-use tokio_core::reactor::Timeout;
+use tokio::net::{UnixListener, UnixStream};
+use tokio::io::AsyncRead;
+use tokio::codec::{Framed,Decoder};
+use tokio;
+use tokio::prelude::*;
+use tokio::timer::Delay;
 use bytes::BytesMut;
 use std::io::{Error, ErrorKind};
 use std::path::Path;
 use std::fs;
 use rand::{thread_rng, Rng};
 use std::u16;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use {Identifier, Shared};
 use unix::{Connection, ControlProtocolCodec, Frame};
@@ -20,7 +20,6 @@ use unix::{Connection, ControlProtocolCodec, Frame};
 #[derive(Clone)]
 pub struct UnixState {
     pub ctl_socket: String,
-    handle: Handle,
     connections: HashMap<(Identifier, u16, u16), Connection>,
     listeners: HashMap<u16, Sender<Frame>>,
     upstream: Sender<(Identifier, u16, u16, BytesMut)>,
@@ -38,12 +37,10 @@ impl Drop for UnixState {
 impl UnixState {
     pub fn new(
         ctl_socket: String,
-        handle: Handle,
         upstream: Sender<(Identifier, u16, u16, BytesMut)>,
     ) -> UnixState {
         UnixState {
             ctl_socket: ctl_socket,
-            handle: handle,
             connections: HashMap::new(),
             listeners: HashMap::new(),
             upstream: upstream,
@@ -65,12 +62,12 @@ impl Shared<UnixState> {
             return;
         }
         let state = self.clone();
-        let done = UnixListener::bind(&self.read().ctl_socket, &self.read().handle)
+        let done = UnixListener::bind(&self.read().ctl_socket)
             .expect("Unable to open unix control socket")
             .incoming()
-            .for_each(move |(stream, _addr)| state.handle_new_stream(stream))
+            .for_each(move |stream| state.handle_new_stream(stream))
             .map_err(|e| println!("Control socket was closed: {}", e));
-        self.spawn(done);
+        tokio::spawn(done);
     }
 
     pub fn handle_new_stream(
@@ -78,7 +75,7 @@ impl Shared<UnixState> {
         connection: UnixStream,
     ) -> impl Future<Item = (), Error = Error> {
         let state = self.clone();
-        let socket = connection.framed(ControlProtocolCodec);
+        let socket = ControlProtocolCodec{}.framed(connection);
         socket
             .into_future()
             .and_then(move |(frame, socket)| match frame {
@@ -155,7 +152,7 @@ impl Shared<UnixState> {
     ) {
         let (unix_sink, _unix_stream) = connection.split();
         let (sender, receiver) = channel::<Frame>(10);
-        self.spawn(
+        tokio::spawn(
             receiver
                 .forward(
                     unix_sink
@@ -174,7 +171,7 @@ impl Shared<UnixState> {
             .send((host_id, src_port, dst_port, data))
             .map(|_| ())
             .map_err(|err| warn!("Failed to pass message to upstream: {}", err));
-        self.spawn(task);
+        tokio::spawn(task);
     }
 
     pub fn used_ports(&self) -> Vec<u16> {
@@ -183,10 +180,6 @@ impl Shared<UnixState> {
             .keys()
             .map(|&(_host_id, src_port, _dst_port)| src_port)
             .collect()
-    }
-
-    pub fn spawn<F: Future<Item = (), Error = ()> + 'static>(&self, f: F) {
-        self.read().handle.spawn(f)
     }
 
     pub fn deliver_frame(
@@ -204,12 +197,13 @@ impl Shared<UnixState> {
             .connections
             .get(&(host_id, local_port, remote_port))
         {
-            return self.spawn(
+            tokio::spawn(
                 socket
                     .send_frame(data)
                     .map(|_| ())
                     .map_err(|err| warn!("Unable to deliver frame locally: {}", err)),
             );
+            return;
         }
         if let Some(listener) = self.read().listeners.get(&local_port) {
             let state = self.clone();
@@ -224,16 +218,14 @@ impl Shared<UnixState> {
                     );
                     state.write().listeners.remove(&local_port);
                 });
-            self.spawn(notify_listener);
+            tokio::spawn(notify_listener);
             let state = self.clone();
-            let resend = Timeout::new(Duration::new(0, 200 * 1000 * 1000), &self.read().handle)
-                .expect("Unable to initialize timeout")
+            let resend = Delay::new(Instant::now() + Duration::new(0, 200 * 1000 * 1000))
                 .map_err(|err| warn!("Timeout error: {}", err))
                 .map(move |_| {
                     state.deliver_frame(host_id, remote_port, local_port, data);
-                })
-                .map(|_| ());
-            return self.spawn(resend);
+                });
+            tokio::spawn(resend);
         }
     }
 }

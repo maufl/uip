@@ -1,4 +1,4 @@
-use tokio_io::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncWrite};
 use futures::sync::mpsc::Receiver;
 use futures::{Async, Poll, Stream};
 use std::net::SocketAddr;
@@ -7,6 +7,7 @@ use std::io::{Error, ErrorKind, Read, Result, Write};
 use network::io::Socket;
 use Shared;
 
+#[derive(Debug)]
 pub struct Connection {
     incoming: Receiver<Vec<u8>>,
     remote_addr: SocketAddr,

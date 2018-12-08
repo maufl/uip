@@ -1,11 +1,11 @@
-use tokio_io::{AsyncRead, AsyncWrite};
-use tokio_core::reactor::Handle;
-use tokio_timer::Timer;
+use tokio;
+use tokio::prelude::*;
+use tokio::timer::Interval;
 use futures::{Future, Sink, Stream};
 use futures::sync::mpsc::{channel, SendError, Sender};
 use tokio_openssl::SslStream;
 use bytes::BytesMut;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::codec::{Codec, Frame};
 use data::Peer;
@@ -14,7 +14,6 @@ use Identifier;
 
 #[derive(Clone)]
 pub struct Connection {
-    handle: Handle,
     sink: Sender<Frame>,
 }
 
@@ -22,23 +21,19 @@ impl Connection {
     pub fn from_tls_stream<S, F>(
         stream: SslStream<S>,
         remote_id: Identifier,
-        handle: Handle,
         callback: F,
     ) -> Connection
     where
-        S: AsyncRead + AsyncWrite + 'static,
-        F: Fn(Identifier, u16, u16, BytesMut) + 'static,
+        S: AsyncRead + AsyncWrite + Send + 'static,
+        F: Fn(Identifier, u16, u16, BytesMut) + Send + 'static,
     {
         let (sink, stream) = stream.framed(Codec()).split();
         let (sender, receiver) = channel::<Frame>(10);
         let task = receiver
             .forward(sink.sink_map_err(|err| println!("Unexpected sink error: {}", err)))
             .map(|_| ());
-        handle.spawn(task);
-        let conn = Connection {
-            handle: handle.clone(),
-            sink: sender,
-        };
+        tokio::spawn(task);
+        let conn = Connection { sink: sender };
         let conn2 = conn.clone();
         let task = stream
             .for_each(move |frame| {
@@ -57,10 +52,9 @@ impl Connection {
                 Ok(())
             })
             .map_err(|err| warn!("Error while receiving frame: {}", err));
-        handle.spawn(task);
+        tokio::spawn(task);
         let conn2 = conn.clone();
-        let task = Timer::default()
-            .interval(Duration::from_secs(15))
+        let task = Interval::new(Instant::now(), Duration::from_secs(15))
             .map_err(|err| {
                 warn!(
                     "Heartbeat timer of connection encountered an error: {}",
@@ -75,7 +69,7 @@ impl Connection {
                     .map(|_| ())
                     .map_err(|_| debug!("Heartbeat ended because connection went away"))
             });
-        handle.spawn(task);
+        tokio::spawn(task);
         conn
     }
 
@@ -85,7 +79,7 @@ impl Connection {
             .send(f)
             .map(|_| ())
             .map_err(|err| warn!("Error sending frame: {}", err));
-        self.handle.spawn(task);
+        tokio::spawn(task);
     }
 
     pub fn send_data_frame(
@@ -116,7 +110,7 @@ impl Connection {
         let task = self.send_data_frame(0, 0, buf)
             .map(|_| {})
             .map_err(|err| warn!("Unable to send peer information: {}", err));
-        self.handle.spawn(task);
+        tokio::spawn(task);
     }
 
     pub fn send_peer_info_request(&self, peer_id: &Identifier) {
