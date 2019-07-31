@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use futures::sync::mpsc::{channel, Sender};
+use futures::future;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::io::AsyncRead;
 use tokio::codec::{Framed,Decoder};
@@ -57,17 +58,18 @@ impl Shared<UnixState> {
         self.read().ctl_socket.clone()
     }
 
-    fn open_ctl_socket(&self) {
+    fn open_ctl_socket(&self) -> Box<Future<Item=(),Error=()> + Send> {
         if self.read().ctl_socket == "" {
-            return;
+            warn!("No unix control socket path is given");
+            return Box::new(future::err(()));
         }
         let state = self.clone();
-        let done = UnixListener::bind(&self.read().ctl_socket)
+        let future = UnixListener::bind(&self.read().ctl_socket)
             .expect("Unable to open unix control socket")
             .incoming()
             .for_each(move |stream| state.handle_new_stream(stream))
             .map_err(|e| println!("Control socket was closed: {}", e));
-        tokio::spawn(done);
+        Box::new(future)
     }
 
     pub fn handle_new_stream(
@@ -228,14 +230,8 @@ impl Shared<UnixState> {
             tokio::spawn(resend);
         }
     }
-}
 
-impl Future for Shared<UnixState> {
-    type Item = ();
-    type Error = ();
-
-    fn poll(&mut self) -> Poll<(), ()> {
-        self.open_ctl_socket();
-        Ok(Async::NotReady)
+    pub fn run(&self) -> impl Future<Item=(), Error=()> + Send {
+        self.open_ctl_socket()
     }
 }

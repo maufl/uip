@@ -29,5 +29,7 @@ mod utils;
 
 pub use configuration::Configuration;
 pub use state::State;
-pub use data::{Identifier, Identity};
+pub use data::{Identifier, Identity, PeerInformationBase};
 pub use utils::Shared;
+pub use network::NetworkState;
+pub use unix::UnixState;

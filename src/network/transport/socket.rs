@@ -67,7 +67,9 @@ impl Shared<Socket> {
     }
 
     pub fn close(&self) {
-        self.read().socket.close()
+        debug!("Closing transport socket");
+        self.read().socket.close();
+        self.write().connections.clear();
     }
 
     pub fn get_connection(&self, identifier: &Identifier) -> Option<Connection> {
@@ -96,7 +98,8 @@ impl Shared<Socket> {
                     Ok(())
                 })
                 .map_err(|err| warn!("Error while accepting connection: {}", err))
-        });
+        }).map(|_| debug!("Finished accepting incoming connections") )
+            .map_err(|_| debug!("Aborted accepting incoming connections") );
         tokio::spawn(task);
     }
 

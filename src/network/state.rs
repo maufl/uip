@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use tokio;
 use tokio::prelude::*;
 use futures::sync::mpsc::Sender;
+use futures::future;
 use bytes::BytesMut;
 use std::io;
 
@@ -138,13 +139,16 @@ impl Shared<NetworkState> {
         Ok(())
     }
 
-    fn observe_network_changes(&self) {
+    fn observe_network_changes(&self) -> Box<Future<Item=(),Error=()> + Send> {
         let state = self.clone();
         let listener = match Listener::new() {
             Ok(l) => l,
-            Err(err) => return warn!("Unable to listen for network changes: {}", err),
+            Err(err) => {
+                warn!("Unable to listen for network changes: {}", err);
+                return Box::new(future::err(()));
+            }
         };
-        let task = listener
+        let future = listener
             .debounce(Duration::from_millis(2000))
             .for_each(move |_| {
                 info!("Network changed");
@@ -152,7 +156,7 @@ impl Shared<NetworkState> {
                 Ok(())
             })
             .map_err(|err| warn!("Error while listening for network changes: {}", err));
-        tokio::spawn(task);
+        Box::new(future)
     }
 
     pub fn add_relay(&mut self, id: Identifier) {
@@ -313,15 +317,9 @@ impl Shared<NetworkState> {
             .into_future()
             .or_else(move |_| state.connect(host_id))
     }
-}
 
-impl Future for Shared<NetworkState> {
-    type Item = ();
-    type Error = ();
-
-    fn poll(&mut self) -> Poll<(), ()> {
+    pub fn run(&self) -> impl Future<Item=(), Error=()> + Send {
         self.open_new_sockets();
-        self.observe_network_changes();
-        Ok(Async::NotReady)
+        self.observe_network_changes()
     }
 }

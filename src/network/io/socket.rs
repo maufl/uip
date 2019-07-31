@@ -1,6 +1,7 @@
 use tokio;
 use tokio::net::UdpSocket;
 use futures::sync::mpsc::{channel, Receiver, Sender};
+use futures::sync::mpsc;
 use futures::stream::poll_fn;
 use futures::{Async, Future, Poll, Sink, Stream};
 use std::collections::HashMap;
@@ -19,7 +20,7 @@ pub struct Socket {
     connections: HashMap<SocketAddr, Sender<Vec<u8>>>,
     incoming: Receiver<Connection>,
     address: LocalAddress,
-    closed: bool,
+    close_sender: mpsc::Sender<()>
 }
 
 impl Socket {
@@ -56,29 +57,44 @@ impl Shared<Socket> {
 
     pub fn from_socket(sock: UdpSocket, address: LocalAddress) -> Result<Shared<Socket>> {
         let (sender, receiver) = channel::<Connection>(10);
+        let (close_sender, close_receiver) = mpsc::channel(5);
         let socket = Socket {
             inner: sock,
             connections: HashMap::new(),
             incoming: receiver,
             address: address,
-            closed: false,
+            close_sender: close_sender
         }.shared();
-        socket.listen(sender);
+        socket.listen(sender, close_receiver);
         Ok(socket)
     }
 
     pub fn close(&self) {
-        self.write().closed = true;
-        for (_, sender) in self.write().connections.iter_mut() {
+        debug!("Closing shared io socket");
+        let mut socket = self.write();
+        tokio::spawn(
+            socket.close_sender
+                .clone()
+                .send(())
+                .map(|_|())
+                .map_err(|_|())
+        );
+        for (_, sender) in socket.connections.iter_mut() {
             sender.close();
         }
-        self.write().incoming.close()
+        socket.connections.clear();
+        socket.incoming.close()
     }
 
-    fn listen(&self, sender: Sender<Connection>) {
+    fn listen(&self, sender: Sender<Connection>, mut close_receiver: mpsc::Receiver<()>) {
         let socket = self.clone();
         let local_address = socket.read().address.internal;
         let task = poll_fn(move || {
+            match close_receiver.poll() {
+                Ok(Async::Ready(_)) => { debug!("Received close signal"); return Ok(Async::Ready(None)) },
+                Err(_) => return Ok(Async::Ready(None)),
+                _ => {}
+            }
             let mut datagram = [0u8; 1500];
             let (read, addr) = match socket.recv_from(&mut datagram) {
                 Err(e) => {
@@ -112,9 +128,6 @@ impl Shared<Socket> {
     }
 
     pub fn send_to(&self, buf: &[u8], remote: &SocketAddr) -> Result<usize> {
-        if self.read().closed {
-            return Err(Error::new(ErrorKind::UnexpectedEof, "Socket was closed"));
-        }
         match self.write().inner.poll_send_to(buf, remote) {
             Ok(Async::Ready(r)) => Ok(r),
             Ok(Async::NotReady) => Err(Error::new(ErrorKind::WouldBlock, "Operation would block")),
@@ -122,10 +135,7 @@ impl Shared<Socket> {
         }
     }
 
-    pub fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr)> {
-        if self.read().closed {
-            return Err(Error::new(ErrorKind::UnexpectedEof, "Socket was closed"));
-        }
+    fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr)> {
         match self.write().inner.poll_recv_from(buf) {
             Ok(Async::Ready(r)) => Ok(r),
             Ok(Async::NotReady) => Err(Error::new(ErrorKind::WouldBlock, "Operation would block")),
