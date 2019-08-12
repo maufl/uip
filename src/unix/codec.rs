@@ -6,12 +6,16 @@ use tokio::codec::{Decoder, Encoder};
 use Identifier;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ErrorCode {
+    NetworkUnreachable,
+    NotBound
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Frame {
-    Connect(Identifier, u16),
-    Data(Vec<u8>),
-    Listen(u16),
-    IncomingConnection(Identifier, u16),
-    Accept(Identifier, u16, u16),
+    Bind(u16),
+    Data(Identifier, u16, Vec<u8>),
+    Error(ErrorCode)
 }
 
 pub struct ControlProtocolCodec;

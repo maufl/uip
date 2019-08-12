@@ -47,32 +47,17 @@ fn main() {
 
 fn listen(socket_path: &str, port: u16) {
     let mut conn = UnixStream::connect(socket_path).expect("Unable to connect to UIP daemon");
-    let msg = Frame::Listen(port);
+    let msg = Frame::Bind(port);
     let mut buf = Vec::new();
     msg.serialize(&mut Serializer::new(&mut buf))
         .expect("Unable to serialize listen message");
     conn.write(&buf).expect("Unable to send listen message");
-    let mut buf = [0; 1500];
-    let n = conn.read(&mut buf[..]).expect("Unable to read message");
-    let frame: Frame = from_slice(&buf[..n]).expect("Unable to parse incoming connection message");
-    let (remote_id, src_port) = match frame {
-        Frame::IncomingConnection(id, port) => (id, port),
-        _ => return error!("Unexpected message"),
-    };
-    info!("New incoming connection from {}:{}", remote_id, src_port);
-    let mut conn =
-        UnixStream::connect(socket_path).expect("Unable to connect Unix socket to UIP daemon");
-    let msg = Frame::Accept(remote_id, port, src_port);
-    let mut buf = Vec::new();
-    msg.serialize(&mut Serializer::new(&mut buf))
-        .expect("Unable to serialize connect message");
-    conn.write(&buf).expect("Unable to send connect message");
     loop {
         let mut buf = [0; 1500];
         let n = conn.read(&mut buf[..]).expect("Unable to read message");
         let frame: Frame = from_slice(&buf[..n]).expect("Unable to parse data message");
         match frame {
-            Frame::Data(data) => info!("Received new data: {:?}", data),
+            Frame::Data(host_id, remote_port, data) => info!("Received new data from [{}]:{} :: {:?}", host_id, remote_port, data),
             _ => return error!("Unexpected message"),
         };
     }
@@ -81,17 +66,12 @@ fn listen(socket_path: &str, port: u16) {
 fn connect(socket_path: &str, remote_id: Identifier, port: u16) {
     let mut conn =
         UnixStream::connect(socket_path).expect("Unable to connect Unix socket to UIP daemon");
-    let msg = Frame::Connect(remote_id, port);
-    let mut buf = Vec::new();
-    msg.serialize(&mut Serializer::new(&mut buf))
-        .expect("Unable to serialize connect message");
-    conn.write(&buf).expect("Unable to send connect message");
     loop {
         let mut input = String::new();
         match stdin().read_line(&mut input) {
             Ok(_) => {
                 let mut buf = Vec::new();
-                Frame::Data(input.as_bytes().to_vec())
+                Frame::Data(remote_id.clone(), port, input.as_bytes().to_vec())
                     .serialize(&mut Serializer::new(&mut buf))
                     .expect("Unable to serialize data message");
                 conn.write(&buf).expect("Unable to send connect message");
