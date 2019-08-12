@@ -21,7 +21,7 @@ pub struct Socket {
     socket: Shared<IoSocket>,
     pub connections: HashMap<Identifier, Connection>,
     //state: Shared<NetworkState>,
-    deliver_frame: Box<Fn(Identifier, u16, u16, BytesMut) + Send + Sync>,
+    deliver_frame: Box<dyn Fn(Identifier, u16, u16, BytesMut) + Send + Sync>,
 }
 
 impl Socket {

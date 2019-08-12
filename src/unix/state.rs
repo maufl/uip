@@ -110,7 +110,7 @@ impl Shared<UnixState> {
         let task = unix_stream.for_each(move |frame| match frame {
             Frame::Data(host_id, dst_port, data) => Ok(socket.send_frame(host_id, src_port, dst_port, data.into())),
             _ => Ok(warn!("Unhandled frame received on Unix stream."))
-        }).map_err(|err| warn!("Error while forwarding frames from Unix stream"));
+        }).map_err(|err| warn!("Error while forwarding frames from Unix stream: {}", err));
         tokio::spawn(task);
         self.write().connections.insert(src_port, sender);
     }

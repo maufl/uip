@@ -139,7 +139,7 @@ impl Shared<NetworkState> {
         Ok(())
     }
 
-    fn observe_network_changes(&self) -> Box<Future<Item=(),Error=()> + Send> {
+    fn observe_network_changes(&self) -> Box<dyn Future<Item=(),Error=()> + Send> {
         let state = self.clone();
         let listener = match Listener::new() {
             Ok(l) => l,

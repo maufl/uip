@@ -23,12 +23,10 @@ extern crate tokio_openssl;
 mod data;
 pub mod unix;
 mod configuration;
-mod state;
 mod network;
 mod utils;
 
 pub use configuration::Configuration;
-pub use state::State;
 pub use data::{Identifier, Identity, PeerInformationBase};
 pub use utils::Shared;
 pub use network::NetworkState;
