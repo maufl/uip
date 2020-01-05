@@ -1,8 +1,9 @@
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use tokio::sync::{Mutex,MutexGuard};
 
 #[derive(Debug)]
 pub struct Shared<T> {
-    inner: Arc<RwLock<T>>,
+    inner: Arc<Mutex<T>>,
 }
 
 impl<T> Clone for Shared<T> {
@@ -16,18 +17,18 @@ impl<T> Clone for Shared<T> {
 impl<T> Shared<T> {
     pub fn new(inner: T) -> Shared<T> {
         Shared {
-            inner: Arc::new(RwLock::new(inner)),
+            inner: Arc::new(Mutex::new(inner)),
         }
     }
-    pub fn read(&self) -> RwLockReadGuard<T> {
+    pub fn read(&self) -> MutexGuard<T> {
         self.inner
-            .read()
+            .try_lock()
             .expect("Unable to lock shared struct for reading.")
     }
 
-    pub fn write(&self) -> RwLockWriteGuard<T> {
+    pub fn write(&self) -> MutexGuard<T> {
         self.inner
-            .write()
+            .try_lock()
             .expect("Unable to lock shared struct for writing.")
     }
 }

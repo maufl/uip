@@ -1,6 +1,6 @@
-use tokio::codec::{Decoder, Encoder};
+use tokio_util::codec::{Decoder,Encoder};
 use std::io::{Error, ErrorKind};
-use bytes::{BufMut, BytesMut};
+use bytes::{BufMut, Bytes, BytesMut};
 use byteorder::{BigEndian, ByteOrder};
 
 pub enum Frame {
@@ -9,7 +9,7 @@ pub enum Frame {
     Data {
         src_port: u16,
         dst_port: u16,
-        data: BytesMut,
+        data: Bytes,
     },
 }
 
@@ -29,9 +29,9 @@ impl Encoder for Codec {
                 data,
             } => {
                 dst.put_u8(3);
-                dst.put_u16_be(src_port);
-                dst.put_u16_be(dst_port);
-                dst.put_u16_be(data.len() as u16);
+                dst.put_u16(src_port);
+                dst.put_u16(dst_port);
+                dst.put_u16(data.len() as u16);
                 dst.put(data);
             }
         };
@@ -73,7 +73,7 @@ impl Decoder for Codec {
         Ok(Some(Frame::Data {
             src_port: src_port,
             dst_port: dst_port,
-            data: src.split_to(length),
+            data: src.split_to(length).freeze(),
         }))
     }
 }

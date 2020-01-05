@@ -1,16 +1,23 @@
 use std::io::{Error, Result};
 use std::time::Duration;
+use std::pin::Pin;
+use std::task::{Context,Poll};
 
-use futures::prelude::*;
+use tokio::prelude::*;
+use tokio::time::throttle;
+use tokio::stream::Stream;
+use pin_project_lite::pin_project;
 
-use network::change::rtnetlink_socket::RTNetlinkSocket;
-use network::change::debounce::{debounce, Debounce};
+use crate::network::change::rtnetlink_socket::RTNetlinkSocket;
 
 pub const RTMGRP_IPV4_ROUTE: u32 = 0x40;
 pub const RTMGRP_IPV6_ROUTE: u32 = 0x400;
 
-pub struct Listener {
-    inner: RTNetlinkSocket,
+pin_project!{
+    pub struct Listener {
+        #[pin]
+        inner: RTNetlinkSocket,
+    }
 }
 
 impl Listener {
@@ -19,16 +26,15 @@ impl Listener {
             .map(|socket| Listener { inner: socket })
     }
 
-    pub fn debounce(self, duration: Duration) -> Debounce<Listener, (), Error> {
-        debounce(self, duration)
+    pub fn debounce(self, duration: Duration) -> impl Stream<Item=()> {
+        throttle(duration, self)
     }
 }
 
 impl Stream for Listener {
     type Item = ();
-    type Error = Error;
 
-    fn poll(&mut self) -> Poll<Option<()>, Error> {
-        self.inner.poll().map(|a| a.map(|o| o.map(|_| ())))
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<()>> {
+        self.project().inner.poll_next(cx).map(|opt| opt.map(|_| ()))
     }
 }

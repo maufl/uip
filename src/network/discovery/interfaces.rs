@@ -3,7 +3,7 @@ use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use interfaces::{Address, Interface, Kind};
 use interfaces::flags::IFF_RUNNING;
 
-use network::LocalAddress;
+use crate::network::LocalAddress;
 use super::AddressDiscoveryError;
 
 pub fn discover_addresses() -> Result<Vec<LocalAddress>, AddressDiscoveryError> {

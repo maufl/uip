@@ -3,18 +3,18 @@ use std::time::Duration;
 use std::collections::HashMap;
 use tokio;
 use tokio::prelude::*;
-use futures::sync::mpsc::Sender;
-use futures::future;
-use bytes::BytesMut;
+use tokio::stream::StreamExt;
+use tokio::sync::mpsc::Sender;
+use bytes::{BytesMut, Bytes};
 use std::io;
 
-use data::{Peer, PeerInformationBase};
-use {Identifier, Identity, Shared};
-use network::LocalAddress;
-use network::transport::{Connection as TransportConnection, Socket};
-use network::discovery::discover_addresses;
-use network::change::Listener;
-use network::protocol::Message;
+use crate::data::{Peer, PeerInformationBase};
+use crate::{Identifier, Identity, Shared};
+use crate::network::LocalAddress;
+use crate::network::transport::{Connection as TransportConnection, Socket};
+use crate::network::discovery::discover_addresses;
+use crate::network::change::Listener;
+use crate::network::protocol::Message;
 
 #[derive(Clone)]
 pub struct NetworkState {
@@ -22,7 +22,7 @@ pub struct NetworkState {
     pub pib: PeerInformationBase,
     pub relays: Vec<Identifier>,
     pub port: u16,
-    upstream: Sender<(Identifier, u16, u16, BytesMut)>,
+    upstream: Sender<(Identifier, u16, u16, Bytes)>,
     sockets: HashMap<SocketAddr, Shared<Socket>>,
 }
 
@@ -32,7 +32,7 @@ impl NetworkState {
         pib: PeerInformationBase,
         relays: Vec<Identifier>,
         port: u16,
-        upstream: Sender<(Identifier, u16, u16, BytesMut)>,
+        upstream: Sender<(Identifier, u16, u16, Bytes)>,
     ) -> NetworkState {
         NetworkState {
             id: id,
@@ -50,7 +50,7 @@ impl NetworkState {
 }
 
 impl Shared<NetworkState> {
-    fn open_new_sockets(&self) {
+    async fn open_new_sockets(&self) {
         let mut addresses = match discover_addresses() {
             Ok(a) => a,
             Err(err) => return warn!("Error enumerating network interfaces: {}", err),
@@ -68,10 +68,11 @@ impl Shared<NetworkState> {
                 IpAddr::V6(v6) => v6.is_global(),
             });
         for address in new_addresses {
-            let _ = self.open_socket(*address)
-                .map_err(|err| warn!("Error while opening socket: {}", err));
+            if let Err(err) = self.open_socket(*address).await {
+                 warn!("Error while opening socket: {}", err);
+            }
         }
-        self.publish_addresses();
+        self.publish_addresses().await;
     }
 
     fn close_stale_sockets(&self, current_addresses: &[LocalAddress]) {
@@ -113,63 +114,64 @@ impl Shared<NetworkState> {
         )
     }
 
-    fn publish_addresses(&self) {
+    async fn publish_addresses(&self) {
         let peer_information = self.my_peer_information();
         for socket in self.read().sockets.values() {
-            for connection in socket.read().connections.values() {
-                connection.send_peer_info(peer_information.clone());
+            for connection in socket.read().connections.values_mut() {
+                connection.send_peer_info(peer_information.clone()).await;
             }
         }
     }
 
-    fn open_socket(&self, address: LocalAddress) -> io::Result<()> {
+    async fn open_socket(&self, address: LocalAddress) -> io::Result<()> {
         debug!("Opening new socket on address {:?}", address);
-        let state = self.clone();
-        let socket = Shared::<Socket>::open(
-            address,
-            self.read().id.clone(),
-            move |identifier: Identifier, src_port: u16, dst_port: u16, data: BytesMut| {
-                state.deliver_frame(identifier, src_port, dst_port, data)
-            },
-        )?;
+        let (data_sender, mut data_receiver) = tokio::sync::mpsc::channel::<(Identifier, u16, u16, Bytes)>(10);
+        let socket = Shared::<Socket>::open( address, self.read().id.clone(), data_sender).await?;
         self.write()
             .sockets
             .insert(address.internal, socket.clone());
-        self.connect_to_relays_on_socket(&socket);
+        self.connect_to_relays_on_socket(&socket).await;
+        let state = self.clone();
+        tokio::spawn(async move {
+            loop {
+                let (id, src_port, dst_port, data) = match data_receiver.next().await {
+                    Some(frame) => frame,
+                    None => return info!("All frame senders for socket closed")
+                };
+                state.deliver_frame(id, src_port, dst_port, data).await
+            }
+        });
         Ok(())
     }
 
-    fn observe_network_changes(&self) -> Box<dyn Future<Item=(),Error=()> + Send> {
+    async fn observe_network_changes(&self) -> Result<(),()> {
         let state = self.clone();
         let listener = match Listener::new() {
             Ok(l) => l,
             Err(err) => {
                 warn!("Unable to listen for network changes: {}", err);
-                return Box::new(future::err(()));
+                return Err(());
             }
         };
-        let future = listener
-            .debounce(Duration::from_millis(2000))
-            .for_each(move |_| {
-                info!("Network changed");
-                state.open_new_sockets();
-                Ok(())
-            })
-            .map_err(|err| warn!("Error while listening for network changes: {}", err));
-        Box::new(future)
+        let mut change_stream = listener.debounce(Duration::from_millis(2000));
+        while change_stream.next().await.is_some() {
+            info!("Network changed");
+            state.open_new_sockets().await;
+        };
+        Ok(())
     }
 
     pub fn add_relay(&mut self, id: Identifier) {
         self.write().relays.push(id);
     }
 
-    pub fn connect_to_relays(&self) {
+    pub async fn connect_to_relays(&self) {
         for socket in self.read().sockets.values() {
-            self.connect_to_relays_on_socket(socket)
+            self.connect_to_relays_on_socket(socket).await;
         }
     }
 
-    pub fn connect_to_relays_on_socket(&self, socket: &Shared<Socket>) {
+    pub async fn connect_to_relays_on_socket(&self, socket: &Shared<Socket>) {
         for relay in &self.read().relays {
             if socket.get_connection(relay).is_some() {
                 continue;
@@ -181,36 +183,29 @@ impl Shared<NetworkState> {
             info!("Connecting to relay {}", relay);
             let relay = *relay;
             let state = self.clone();
-            let future = socket
-                .open_connection(relay, addr)
-                .and_then(move |conn| {
-                    conn.send_peer_info(state.my_peer_information());
-                    Ok(())
-                })
-                .map_err(move |err| warn!("Unable to connect to peer {}: {}", relay, err));
-            tokio::spawn(future);
+            match socket.open_connection(relay, addr).await {
+                Ok(mut conn) => conn.send_peer_info(state.my_peer_information()).await,
+                Err(err) =>  warn!("Unable to connect to peer {}: {}", relay, err)
+            };
         }
     }
 
-    fn connect(
+    async fn connect(
         &self,
         remote_id: Identifier,
-    ) -> impl Future<Item = TransportConnection, Error = io::Error> {
-        let state = self.clone();
-        self.read()
-            .pib
+    ) -> Result<TransportConnection, io::Error> {
+        let addr = self.read().pib
             .lookup_peer_address(&remote_id)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "peer address not found"))
-            .into_future()
-            .and_then(move |addr| state.connect_with_address(remote_id, addr))
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "peer address not found"))?;
+        self.connect_with_address(remote_id, addr).await
     }
 
-    fn connect_with_address(
+    async fn connect_with_address(
         &self,
         remote_id: Identifier,
         address: SocketAddr,
-    ) -> impl Future<Item = TransportConnection, Error = io::Error> {
-        self.read()
+    ) -> Result<TransportConnection, io::Error> {
+        let socket = self.read()
             .sockets
             .iter()
             .filter(|&(addr, _socket)| addr.is_ipv4() == address.is_ipv4())
@@ -219,26 +214,21 @@ impl Shared<NetworkState> {
             .cloned()
             .ok_or_else(|| {
                 io::Error::new(io::ErrorKind::NotConnected, "No socket is currently open")
-            })
-            .into_future()
-            .and_then(move |socket| socket.open_connection(remote_id, address))
+            })?;
+        socket.open_connection(remote_id, address).await
     }
 
-    pub fn deliver_frame(&self, host_id: Identifier, src_port: u16, dst_port: u16, data: BytesMut) {
+    pub async fn deliver_frame(&self, host_id: Identifier, src_port: u16, dst_port: u16, data: Bytes) {
         if src_port == 0 && dst_port == 0 {
-            return self.process_control_message(host_id, data);
+            return self.process_control_message(host_id, data).await;
         }
-        let task = self.read()
-            .upstream
-            .clone()
-            .send((host_id, src_port, dst_port, data))
-            .map(|_| ())
-            .map_err(|err| warn!("Failed to pass message to upstream: {}", err));
-        tokio::spawn(task);
+        if let Err(err) = self.read().upstream.send((host_id, src_port, dst_port, data)).await {
+            warn!("Failed to pass message to upstream: {}", err);
+        }
     }
 
-    pub fn process_control_message(&self, host_id: Identifier, data: BytesMut) {
-        match Message::deserialize_from_msgpck(&data.freeze()) {
+    pub async fn process_control_message(&self, host_id: Identifier, data: Bytes) {
+        match Message::deserialize_from_msgpck(&data) {
             Message::PeerInfo(peer_info) => {
                 info!(
                     "Received new peer information from {}: {:?}",
@@ -254,72 +244,55 @@ impl Shared<NetworkState> {
                     Some(peer) => peer.clone(),
                     None => return,
                 };
-                let task = self.get_connection(host_id)
-                    .and_then(move |conn| {
-                        conn.send_peer_info(peer);
-                        Ok(())
-                    })
-                    .map_err(|err| warn!("Unable to respond with peer information: {}", err));
-                tokio::spawn(task);
+                match self.get_connection(host_id).await {
+                    Ok(mut conn) => conn.send_peer_info(peer).await,
+                    Err(err) => warn!("Unable to respond with peer information: {}", err)
+                }
             }
             Message::Invalid(_) => warn!("Received invalid control message from peer {}", host_id),
         }
     }
 
-    pub fn request_peer_info(&self, id: Identifier) {
+    pub async fn request_peer_info(&self, id: Identifier) {
         debug!("Requesting peer information for {}", id);
         let relay = match self.read().pib.get_peer(&id).and_then(|p| p.relays.first()) {
             Some(id) => *id,
             None => return,
         };
         debug!("Requesting peer information from relay {}", relay);
-        let task = self.get_connection(relay)
-            .and_then(move |conn| {
-                conn.send_peer_info_request(&id);
-                Ok(())
-            })
-            .map_err(move |err| {
-                warn!(
-                    "Unable to request peer information for {} from relay {}: {}",
-                    id, relay, err
-                )
-            });
-        tokio::spawn(task);
+        match self.get_connection(relay).await {
+            Ok(mut conn) => conn.send_peer_info_request(&id).await,
+            Err(err) => warn!("Unable to request peer information for {} from relay {}: {}", id, relay, err)
+        }
     }
 
-    pub fn send_frame(&self, host_id: Identifier, src_port: u16, dst_port: u16, data: BytesMut) {
-        let task = self.get_connection(host_id)
-            .and_then(move |connection| {
-                connection
-                    .send_data_frame(src_port, dst_port, data)
-                    .map_err(|_| {
+    pub async fn send_frame(&self, host_id: Identifier, src_port: u16, dst_port: u16, data: Bytes) {
+        match self.get_connection(host_id).await {
+            Ok(mut connection) => if connection.send_data_frame(src_port, dst_port, data).await.is_err() {
                         // FIXME: At this point, the connection must be removed
-                        io::Error::new(io::ErrorKind::BrokenPipe, "unable to forward frame")
-                    })
-            })
-            .map(|_| {})
-            .map_err(|err| warn!("Error while sending frame: {}", err));
-        tokio::spawn(task);
+                        warn!("unable to forward frame");
+                    }
+            Err(err) => warn!("Error while sending frame: {}", err)
+        }
     }
 
-    pub fn get_connection(
+    pub async fn get_connection(
         &self,
         host_id: Identifier,
-    ) -> impl Future<Item = TransportConnection, Error = io::Error> {
-        let state = self.clone();
-        let connection = self.read()
+    ) -> Result<TransportConnection, io::Error> {
+        let optional_connection = self.read()
             .sockets
             .values()
             .filter_map(|socket| socket.get_connection(&host_id))
             .next();
-        connection
-            .ok_or(())
-            .into_future()
-            .or_else(move |_| state.connect(host_id))
+        match optional_connection {
+            Some(connection) => Ok(connection),
+            None => self.connect(host_id).await
+        }
     }
 
-    pub fn run(&self) -> impl Future<Item=(), Error=()> + Send {
-        self.open_new_sockets();
-        self.observe_network_changes()
+    pub async fn run(&self) {
+        self.open_new_sockets().await;
+        self.observe_network_changes().await;
     }
 }

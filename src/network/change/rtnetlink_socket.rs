@@ -1,5 +1,7 @@
 use std::io::{Error, ErrorKind, Result};
-use std::result;
+use std::task::{Context, Poll};
+use std::pin::Pin;
+
 use nix;
 use nix::sys::socket::{bind, socket, AddressFamily, MsgFlags, SockAddr, SockType, SOCK_CLOEXEC,
                        SOCK_NONBLOCK};
@@ -7,12 +9,11 @@ use nix::unistd::Pid;
 use nix::pty::SessionId;
 use libc::NETLINK_ROUTE;
 use bytes::BytesMut;
-use tokio::reactor::PollEvented2;
+use tokio::io::PollEvented;
+use tokio::stream::Stream;
 use mio::Ready;
-use tokio::io;
-use tokio::prelude::*;
 
-use network::change::evented_socket::EventedSocket;
+use crate::network::change::evented_socket::EventedSocket;
 
 fn nix_error_to_io_error(err: nix::Error) -> Error {
     match err {
@@ -22,7 +23,7 @@ fn nix_error_to_io_error(err: nix::Error) -> Error {
 }
 
 pub struct RTNetlinkSocket {
-    io: PollEvented2<EventedSocket>,
+    io: PollEvented<EventedSocket>,
 }
 
 impl RTNetlinkSocket {
@@ -34,49 +35,29 @@ impl RTNetlinkSocket {
         let pid = SessionId::from(Pid::this()) as u32;
         let addr = SockAddr::new_netlink(pid, groups);
         bind(sock, &addr).map_err(nix_error_to_io_error)?;
-        let io = PollEvented2::new(EventedSocket::from(sock));
+        let io = PollEvented::new(EventedSocket::from(sock))?;
         Ok(RTNetlinkSocket { io: io })
     }
 
-    /// Receives data from the socket.
-    ///
-    /// On success, returns the number of bytes read.
-    pub fn recv(&self, buf: &mut [u8]) -> Result<usize> {
-        if let Async::NotReady = self.io.poll_read_ready(Ready::readable())? {
-            return Err(ErrorKind::WouldBlock.into());
-        }
-        match self.io.get_ref().recv(buf, MsgFlags::empty()) {
-            Ok(n) => Ok(n),
-            Err(e) => {
-                if e.kind() == ErrorKind::WouldBlock {
-                    self.io.clear_read_ready(Ready::readable())?;
-                }
-                Err(e)
-            }
-        }
-    }
-
-    pub fn poll_read_ready(&self, mask: Ready) -> result::Result<Async<Ready>, io::Error> {
-        self.io.poll_read_ready(mask)
-    }
 }
 
 impl Stream for RTNetlinkSocket {
-    type Item = BytesMut;
-    type Error = Error;
+    type Item = Result<BytesMut>;
 
-    fn poll(&mut self) -> Poll<Option<BytesMut>, Error> {
-        if let Async::NotReady = self.poll_read_ready(Ready::readable())? {
-            return Ok(Async::NotReady);
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Result<BytesMut>>> {
+        if let Poll::Pending = self.io.poll_read_ready(cx, Ready::readable()) {
+            return Poll::Pending;
         }
-        let mut buf = BytesMut::with_capacity(4096);
-        match self.recv(&mut buf) {
-            Ok(n) => Ok(Async::Ready(Some(buf.split_to(n)))),
+        let mut buf = BytesMut::new();
+        buf.resize(4096, 0u8);
+        match self.io.get_ref().recv(&mut buf, MsgFlags::empty()) {
+            Ok(n) => Poll::Ready(Some(Ok(buf.split_to(n)))),
             Err(err) => {
                 if err.kind() == ErrorKind::WouldBlock {
-                    Ok(Async::NotReady)
+                    self.io.clear_read_ready(cx, mio::Ready::readable())?;
+                    Poll::Pending
                 } else {
-                    Err(err)
+                    Poll::Ready(Some(Err(err)))
                 }
             }
         }

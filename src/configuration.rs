@@ -1,5 +1,5 @@
-use data::PeerInformationBase;
-use {Identity, Identifier};
+use crate::data::PeerInformationBase;
+use crate::{Identity, Identifier};
 
 #[derive(Serialize, Deserialize)]
 pub struct Configuration {

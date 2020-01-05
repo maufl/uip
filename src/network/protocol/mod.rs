@@ -1,9 +1,9 @@
 use serde::{Deserialize, Serialize};
 use rmp_serde::{Deserializer, Serializer};
 use rmp_serde::encode::Error as EncodeError;
-use bytes::{BytesMut, Bytes, BufMut};
+use bytes::{BytesMut, Bytes, buf::BufMutExt};
 
-use data::{Peer, Identifier};
+use crate::data::{Peer, Identifier};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Message {

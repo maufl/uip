@@ -4,43 +4,43 @@ use std::error::Error;
 use std::string::ToString;
 use std::net::SocketAddr;
 use openssl::ssl::{SslAcceptor, SslConnector, SslMethod, SslVerifyMode};
-use bytes::BytesMut;
+use bytes::{BytesMut,Bytes};
 use tokio;
+use tokio::sync::mpsc::Sender;
+use tokio::stream::StreamExt;
 use tokio::prelude::*;
-use tokio_openssl::{SslAcceptorExt, SslConnectorExt, SslStream};
+use tokio_openssl::{SslStream};
 
-use network::io::Socket as IoSocket;
-use network::LocalAddress;
-use network::transport::Connection;
-use {Identifier, Identity, Shared};
-use network::discovery::request_external_address;
+use crate::network::io::Socket as IoSocket;
+use crate::network::LocalAddress;
+use crate::network::transport::Connection;
+use crate::{Identifier, Identity, Shared};
+use crate::network::discovery::request_external_address;
 
 pub struct Socket {
     id: Identity,
     address: LocalAddress,
-    socket: Shared<IoSocket>,
+    io_socket: Shared<IoSocket>,
     pub connections: HashMap<Identifier, Connection>,
     //state: Shared<NetworkState>,
-    deliver_frame: Box<dyn Fn(Identifier, u16, u16, BytesMut) + Send + Sync>,
+    deliver_frame: Sender<(Identifier, u16, u16, Bytes)>,
 }
 
 impl Socket {
-    pub fn new<F>(
+    pub fn new(
         socket: Shared<IoSocket>,
         address: LocalAddress,
-        deliver_frame: F,
+        deliver_frame: Sender<(Identifier, u16, u16, Bytes)>,
         //state: Shared<NetworkState>,
         id: Identity,
     ) -> Socket
-    where
-        F: Fn(Identifier, u16, u16, BytesMut) + Send + Sync + 'static,
     {
         Socket {
             id: id,
             address: address,
-            socket: socket,
+            io_socket: socket,
             //state: state,
-            deliver_frame: Box::new(deliver_frame),
+            deliver_frame: deliver_frame,
             connections: HashMap::new(),
         }
     }
@@ -51,24 +51,54 @@ impl Socket {
 }
 
 impl Shared<Socket> {
-    pub fn open<F>(
+    pub async fn open(
         address: LocalAddress,
         id: Identity,
-        deliver_frame: F,
+        deliver_frame: Sender<(Identifier, u16, u16, Bytes)>,
     ) -> io::Result<Shared<Socket>>
-    where
-        F: Fn(Identifier, u16, u16, BytesMut) + Send + Sync + 'static,
     {
-        let shared_socket = Shared::<IoSocket>::bind(address)?;
+        let (shared_socket, incomming_connections) = Shared::<IoSocket>::bind(address).await?;
         let socket = Socket::new(shared_socket.clone(), address, deliver_frame, id).shared();
-        socket.listen();
+        socket.spawn_accept_connections_task(incomming_connections);
         socket.request_external_address();
         Ok(socket)
     }
 
+    fn spawn_accept_connections_task(&self, mut incomming_connections: tokio::sync::mpsc::Receiver<crate::network::io::Connection>) {
+        let acceptor = acceptor_for_id(&self.read().id);
+        let socket = self.clone();
+        tokio::spawn(async move {
+            loop {
+                let stream = match incomming_connections.next().await {
+                    Some(s) => s,
+                    None => return
+                };
+                let ssl_stream = match tokio_openssl::accept(&acceptor, stream).await {
+                    Ok(s) => s,
+                    Err(err) => {
+                        warn!("Error performing TLS handshake: {}", err);
+                        continue
+                    }
+                };
+                let id = match id_from_connection(&ssl_stream) {
+                    Ok(id) => id,
+                    Err(err) => {
+                        warn!("Error authenticating peer: {}", err);
+                        continue
+                    }
+                };
+                let conn = Connection::from_tls_stream(
+                    ssl_stream, 
+                    id, 
+                    socket.read().deliver_frame.clone()
+                );
+                socket.write().connections.insert(id, conn);
+            }
+        });
+    }
+
     pub fn close(&self) {
         debug!("Closing transport socket");
-        self.read().socket.close();
         self.write().connections.clear();
     }
 
@@ -76,75 +106,35 @@ impl Shared<Socket> {
         self.read().connections.get(identifier).cloned()
     }
 
-    fn listen(&self) {
-        let socket = self.clone();
-        let acceptor = acceptor_for_id(&self.read().id);
-        let task = self.read().socket.incoming().for_each(move |stream| {
-            let socket = socket.clone();
-            acceptor
-                .accept_async(stream)
-                .map_err(|err| err.description().to_string())
-                .and_then(move |connection| {
-                    let id = id_from_connection(&connection)?;
-                    let socket2 = socket.clone();
-                    let conn = Connection::from_tls_stream(
-                        connection,
-                        id,
-                        move |id, src_port, dst_port, data| {
-                            (socket2.read().deliver_frame)(id, src_port, dst_port, data)
-                        },
-                    );
-                    socket.write().connections.insert(id, conn);
-                    Ok(())
-                })
-                .map_err(|err| warn!("Error while accepting connection: {}", err))
-        }).map(|_| debug!("Finished accepting incoming connections") )
-            .map_err(|_| debug!("Aborted accepting incoming connections") );
-        tokio::spawn(task);
-    }
-
-    pub fn open_connection(
+    pub async fn open_connection(
         &self,
         identifier: Identifier,
         address: SocketAddr,
-    ) -> impl Future<Item = Connection, Error = io::Error> {
+    ) -> Result<Connection, io::Error> {
         let id = &self.read().id;
-        let connector = connector_for_id(id);
-        let state = self.clone();
-        self.read()
-            .socket
-            .connect(address)
-            .into_future()
-            .and_then(move |stream| {
-                connector
-                    .connect_async(&identifier.to_string(), stream)
-                    .map_err(|err| {
-                        io::Error::new(io::ErrorKind::Other, format!("Handshake error: {:?}", err))
-                    })
-            })
-            .and_then(move |stream| {
-                let state2 = state.clone();
-                let conn = Connection::from_tls_stream(
-                    stream,
-                    identifier,
-                    move |id, src_port, dst_port, data| {
-                        (state2.read().deliver_frame)(id, src_port, dst_port, data)
-                    },
-                );
-                Ok(conn)
-            })
+        let connector = match connector_for_id(id).configure() {
+            Ok(c) => c,
+            Err(e) => return Err(io::Error::new(io::ErrorKind::Other, "Unable to build TLS client configuration"))
+        };
+        let conn = self.read().io_socket.connect(address)?;
+        let ssl_stream = match tokio_openssl::connect(connector, &identifier.to_string(), conn).await {
+            Ok(s) => s,
+            Err(err) => return Err(io::Error::new(io::ErrorKind::ConnectionAborted, format!("TLS handshake error: {}", err)))
+        };
+        let conn = Connection::from_tls_stream(ssl_stream, identifier, self.read().deliver_frame.clone());
+        Ok(conn)
     }
 
-    pub fn request_external_address(&self) {
-        let socket = self.clone();
+    pub async fn request_external_address(&self) {
         let internal = match self.read().address.internal {
             SocketAddr::V4(addr) => addr,
             _ => return,
         };
-        let task = request_external_address(internal)
-            .map(move |external| socket.write().address.external = Some(SocketAddr::V4(external)))
-            .map_err(|err| warn!("Unable to request external address: {}", err));
-        tokio::spawn(task);
+        let external = match request_external_address(internal).await {
+            Ok(addr) => addr,
+            Err(err) => return warn!("Unable to request external address: {}", err)
+        };
+        self.write().address.external = Some(SocketAddr::V4(external));
     }
 
     pub fn public_address(&self) -> Option<SocketAddr> {
@@ -164,7 +154,7 @@ fn id_from_connection<S>(connection: &SslStream<S>) -> Result<Identifier, String
 where
     S: AsyncRead + AsyncWrite + 'static,
 {
-    let session = connection.get_ref().ssl();
+    let session = connection.ssl();
     let x509 = session
         .peer_certificate()
         .ok_or("Client did not provide a certificate")?;

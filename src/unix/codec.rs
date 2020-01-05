@@ -2,8 +2,8 @@ use std::io::{Error, ErrorKind, Result};
 use serde::Serialize;
 use rmp_serde::{from_slice, Serializer};
 use bytes::BytesMut;
-use tokio::codec::{Decoder, Encoder};
-use Identifier;
+use tokio_util::codec::{Decoder, Encoder};
+use crate::Identifier;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ErrorCode {

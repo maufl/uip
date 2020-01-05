@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 use std::collections::HashMap;
 
-use Identifier;
+use crate::Identifier;
 use super::Peer;
 
 #[derive(Serialize, Deserialize, Clone, Default, Debug)]

@@ -1,24 +1,25 @@
 use std::collections::HashMap;
-use futures::sync::mpsc::{channel, Sender};
-use futures::future;
+use tokio::sync::mpsc::{channel, Sender};
 use tokio::net::{UnixListener, UnixStream};
-use tokio::codec::{Framed,Decoder};
+use tokio_util::codec::{FramedRead,FramedWrite};
 use tokio;
 use tokio::prelude::*;
-use bytes::BytesMut;
-use std::io::{Error, ErrorKind};
+use futures::{pin_mut, Sink, future::poll_fn};
+use futures_util::StreamExt;
+use bytes::{Bytes,BytesMut};
+use std::io::{Error};
 use std::path::Path;
 use std::fs;
 use std::u16;
 
-use {Identifier, Shared};
-use unix::{ControlProtocolCodec, Frame};
+use crate::{Identifier, Shared};
+use crate::unix::{ControlProtocolCodec, Frame};
 
 #[derive(Clone)]
 pub struct UnixState {
     pub ctl_socket: String,
     connections: HashMap<u16, Sender<Frame>>,
-    upstream: Sender<(Identifier, u16, u16, BytesMut)>,
+    upstream: Sender<(Identifier, u16, u16, Bytes)>,
 }
 
 impl Drop for UnixState {
@@ -33,7 +34,7 @@ impl Drop for UnixState {
 impl UnixState {
     pub fn new(
         ctl_socket: String,
-        upstream: Sender<(Identifier, u16, u16, BytesMut)>,
+        upstream: Sender<(Identifier, u16, u16, Bytes)>,
     ) -> UnixState {
         UnixState {
             ctl_socket: ctl_socket,
@@ -52,77 +53,68 @@ impl Shared<UnixState> {
         self.read().ctl_socket.clone()
     }
 
-    fn open_ctl_socket(&self) -> Box<dyn Future<Item=(),Error=()> + Send> {
+    async fn open_ctl_socket(&self) -> Result<(), tokio::io::Error> {
         if self.read().ctl_socket == "" {
             warn!("No unix control socket path is given");
-            return Box::new(future::err(()));
+            return Err(tokio::io::Error::new(tokio::io::ErrorKind::NotFound, "No unix control socket path is given"));
         }
-        let state = self.clone();
-        let future = UnixListener::bind(&self.read().ctl_socket)
-            .expect("Unable to open unix control socket")
-            .incoming()
-            .for_each(move |stream| state.handle_new_stream(stream))
-            .map_err(|e| println!("Control socket was closed: {}", e));
-        Box::new(future)
+        let mut listener = UnixListener::bind(&self.read().ctl_socket)?;
+        loop {
+            let (con, _addr) = listener.accept().await?;
+            self.handle_new_stream(con).await;
+        }
     }
 
-    pub fn handle_new_stream(
+    pub async fn handle_new_stream(
         &self,
-        connection: UnixStream,
-    ) -> impl Future<Item = (), Error = Error> {
-        let state = self.clone();
-        let socket = ControlProtocolCodec{}.framed(connection);
-        socket
-            .into_future()
-            .and_then(move |(frame, socket)| match frame {
-                Some(Frame::Bind(src_port)) => {
+        mut connection: UnixStream,
+    ) -> Result<(), Error> {
+        let (read_half, write_half) = tokio::io::split(connection);
+        let mut read_half = FramedRead::new(read_half, ControlProtocolCodec{});
+        let write_half = FramedWrite::new(write_half, ControlProtocolCodec{});
+        match read_half.next().await {
+            Some(Ok(Frame::Bind(src_port))) => {
                     debug!("Received a listen message for port {}", src_port);
-                    state.stream_bind(socket, src_port);
-                    Ok(())
-                }
-                _ => return Err((Error::new(ErrorKind::Other, "Unexpected message"), socket)),
-            })
-            .then(|result| {
-                if let Err(err) = result {
-                    warn!("Error in unix stream: {}", err.0);
-                }
-                Ok(())
-            })
+                    self.spawn_write_task(src_port, write_half);
+                    self.spawn_read_task(src_port, read_half);
+            },
+            Some(Ok(Frame::Data(_,_,_))) => warn!("Received data on an unix connection that was not bound"),
+            Some(Ok(Frame::Error(err))) => warn!("Received an error on an unix connection tat was not bound: {:?}", err),
+            Some(Err(err)) => warn!("Error in unix stream: {}", err),
+            None => {},
+        };
+        Ok(())
     }
 
-    pub fn stream_bind(
-        &self,
-        connection: Framed<UnixStream, ControlProtocolCodec>,
-        src_port: u16,
-    ) {
-        let socket = self.clone();
-        let (unix_sink, unix_stream) = connection.split();
+    fn spawn_read_task(&self, src_port: u16, mut read_half: FramedRead<tokio::io::ReadHalf<tokio::net::UnixStream>, ControlProtocolCodec>) {
+        let state = self.clone();
+        tokio::spawn(async move {
+            loop {
+                match read_half.next().await {
+                    Some(Ok(Frame::Data(host_id, dst_port, data))) => state.send_frame(host_id, src_port, dst_port, data.into()).await,
+                    Some(_) => return warn!("Unhandled frame received on Unix stream."),
+                    None => return info!("Unix socket closed.")
+                }
+            }
+        });
+    }
+
+    fn spawn_write_task(&self, src_port: u16, write_half: FramedWrite<tokio::io::WriteHalf<tokio::net::UnixStream>, ControlProtocolCodec>) {
         let (sender, receiver) = channel::<Frame>(10);
-        tokio::spawn(
-            receiver
-                .forward(
-                    unix_sink
-                        .sink_map_err(|err| warn!("Sink error for Unix listening socket: {}", err)),
-                )
-                .map(|_| ())
-                .map_err(|_| warn!("Forwarding error for Unix listening socket.")),
-        );
-        let task = unix_stream.for_each(move |frame| match frame {
-            Frame::Data(host_id, dst_port, data) => Ok(socket.send_frame(host_id, src_port, dst_port, data.into())),
-            _ => Ok(warn!("Unhandled frame received on Unix stream."))
-        }).map_err(|err| warn!("Error while forwarding frames from Unix stream: {}", err));
-        tokio::spawn(task);
         self.write().connections.insert(src_port, sender);
+        tokio::spawn(async move {
+            receiver.map(|f| Ok(f)).forward(write_half).await;
+        });
     }
 
-    pub fn send_frame(&self, host_id: Identifier, src_port: u16, dst_port: u16, data: BytesMut) {
-        let task = self.read()
+    pub async fn send_frame(&self, host_id: Identifier, src_port: u16, dst_port: u16, data: Bytes) {
+        let res = self.read()
             .upstream
-            .clone()
             .send((host_id, src_port, dst_port, data))
-            .map(|_| ())
-            .map_err(|err| warn!("Failed to pass message to upstream: {}", err));
-        tokio::spawn(task);
+            .await;
+        if let Err(err) = res {
+            warn!("Failed to pass message to upstream: {}", err);
+        };
     }
 
     pub fn used_ports(&self) -> Vec<u16> {
@@ -133,33 +125,26 @@ impl Shared<UnixState> {
             .collect()
     }
 
-    pub fn deliver_frame(
+    pub async fn deliver_frame(
         &self,
         host_id: Identifier,
         remote_port: u16,
         local_port: u16,
-        data: BytesMut,
+        data: Bytes,
     ) {
         debug!(
             "Received new data from {}:{} to port {} {:?}",
             host_id, remote_port, local_port, data
         );
-        if let Some(socket) = self.read()
-            .connections
-            .get(&local_port)
-        {
-            tokio::spawn(
-                socket
-                    .clone()
-                    .send(Frame::Data(host_id, remote_port, data.to_vec()))
-                    .map(|_| ())
-                    .map_err(|err| warn!("Unable to deliver frame locally: {}", err)),
-            );
-            return;
+        if let Some(socket) = self.read().connections.get_mut(&local_port) {
+            let res = socket.send(Frame::Data(host_id, remote_port, data.to_vec())).await;
+            if res.is_err() {
+                warn!("Unable to deliver frame locally");
+            }
         }
     }
 
-    pub fn run(&self) -> impl Future<Item=(), Error=()> + Send {
-        self.open_ctl_socket()
+    pub async fn run(&self) -> Result<(), tokio::io::Error> {
+        self.open_ctl_socket().await
     }
 }

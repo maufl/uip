@@ -1,9 +1,9 @@
 #![feature(ip)]
 #![feature(nll)]
+#![feature(async_await)]
 
 extern crate byteorder;
 extern crate bytes;
-extern crate futures;
 extern crate igd;
 extern crate interfaces;
 extern crate libc;

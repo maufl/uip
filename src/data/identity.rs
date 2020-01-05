@@ -7,7 +7,7 @@ use openssl::asn1::Asn1Time;
 use std::ops::Deref;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use Identifier;
+use crate::Identifier;
 
 #[derive(Serialize, Deserialize)]
 pub struct Identity {

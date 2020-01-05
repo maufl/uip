@@ -1,192 +1,97 @@
 use tokio;
-use tokio::net::UdpSocket;
-use futures::sync::mpsc::{channel, Receiver, Sender};
-use futures::sync::mpsc;
-use futures::stream::poll_fn;
-use futures::{Async, Future, Poll, Sink, Stream};
+use tokio::prelude::*;
+use tokio::net::{UdpSocket, udp};
+use tokio::sync::mpsc::{channel, Receiver, Sender};
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::io::{Error, ErrorKind, Result};
-use nix;
-use std::os::unix::io::AsRawFd;
+use std::io::{Result};
+use bytes::{Bytes,BytesMut};
 
-use network::LocalAddress;
-use Shared;
+use crate::network::LocalAddress;
+use crate::Shared;
 use super::Connection;
 
 #[derive(Debug)]
 pub struct Socket {
-    inner: UdpSocket,
-    connections: HashMap<SocketAddr, Sender<Vec<u8>>>,
-    incoming: Receiver<Connection>,
+    connections: HashMap<SocketAddr, Sender<Bytes>>,
+    out: Sender<(SocketAddr, Bytes)>,
     address: LocalAddress,
-    close_sender: mpsc::Sender<()>
-}
-
-impl Socket {
-    pub fn shared(self) -> Shared<Socket> {
-        Shared::new(self)
-    }
-}
-
-impl Drop for Socket {
-    fn drop(&mut self) {
-        debug!("IO socket dropped")
-    }
-}
-
-fn nix_error_to_io_error(err: nix::Error) -> Error {
-    match err {
-        nix::Error::Sys(err_no) => Error::from(err_no),
-        _ => Error::new(ErrorKind::Other, err),
-    }
+    upd_address: SocketAddr
 }
 
 impl Shared<Socket> {
-    pub fn bind(addr: LocalAddress) -> Result<Shared<Socket>> {
-        let socket = UdpSocket::bind(&addr.internal)?;
-        if cfg!(unix) {
-            nix::sys::socket::setsockopt(
-                socket.as_raw_fd(),
-                nix::sys::socket::sockopt::ReusePort,
-                &true,
-            ).map_err(nix_error_to_io_error)?;
-        }
-        Shared::<Socket>::from_socket(socket, addr)
-    }
-
-    pub fn from_socket(sock: UdpSocket, address: LocalAddress) -> Result<Shared<Socket>> {
-        let (sender, receiver) = channel::<Connection>(10);
-        let (close_sender, close_receiver) = mpsc::channel(5);
-        let socket = Socket {
-            inner: sock,
+    pub async fn bind(addr: LocalAddress) -> Result<(Shared<Socket>, Receiver<Connection>)> {
+        let socket = UdpSocket::bind(&addr.internal).await?;
+        let upd_address = socket.local_addr()?;
+        let (udp_receive_half, udp_send_half) = socket.split();     
+        let (connection_sender, connection_receiver) = channel::<Connection>(10);
+        let (data_sender, data_receiver) = channel::<(SocketAddr, Bytes)>(10);
+        let socket = Shared::new(Socket {
             connections: HashMap::new(),
-            incoming: receiver,
-            address: address,
-            close_sender: close_sender
-        }.shared();
-        socket.listen(sender, close_receiver);
-        Ok(socket)
+            out: data_sender,
+            address: addr,
+            upd_address: upd_address
+        });
+        socket.spawn_read_task(udp_receive_half, connection_sender);
+        socket.spawn_write_task(udp_send_half, data_receiver);
+        Ok((socket, connection_receiver))
     }
 
-    pub fn close(&self) {
-        debug!("Closing shared io socket");
-        let mut socket = self.write();
-        tokio::spawn(
-            socket.close_sender
-                .clone()
-                .send(())
-                .map(|_|())
-                .map_err(|_|())
-        );
-        for (_, sender) in socket.connections.iter_mut() {
-            sender.close();
-        }
-        socket.connections.clear();
-        socket.incoming.close()
-    }
-
-    fn listen(&self, sender: Sender<Connection>, mut close_receiver: mpsc::Receiver<()>) {
+    fn spawn_read_task(&self, mut udp_receive_half: udp::RecvHalf, mut connection_sender: Sender<Connection>) {
         let socket = self.clone();
-        let local_address = socket.read().address.internal;
-        let task = poll_fn(move || {
-            match close_receiver.poll() {
-                Ok(Async::Ready(_)) => { debug!("Received close signal"); return Ok(Async::Ready(None)) },
-                Err(_) => return Ok(Async::Ready(None)),
-                _ => {}
-            }
-            let mut datagram = [0u8; 1500];
-            let (read, addr) = match socket.recv_from(&mut datagram) {
-                Err(e) => {
-                    return match e.kind() {
-                        ErrorKind::WouldBlock => Ok(Async::NotReady),
-                        ErrorKind::UnexpectedEof => Ok(Async::Ready(None)),
-                        _ => {
-                            warn!("Error while reading from socket: {}", e);
-                            Err(())
-                        }
-                    }
+        tokio::spawn(async move {
+            loop {
+                let mut bytes = BytesMut::new();
+                bytes.resize(1_500_000, 0);
+                let (size, remote_addr) = match udp_receive_half.recv_from(&mut bytes).await {
+                    Ok(r) => r,
+                    Err(err) => return warn!("Receiver task of UDP socket terminated with error {}", err)
+                };
+                bytes.truncate(size);
+                if let Some(connection) = socket.forward_or_new_connection(bytes.freeze(), remote_addr).await {
+                    connection_sender.send(connection).await;
                 }
-                Ok(d) => d,
-            };
-            if let Some(connection) = socket.forward_or_new_connection(&datagram[0..read], addr) {
-                let task = sender
-                    .clone()
-                    .send(connection)
-                    .map(|_| ())
-                    .map_err(|err| warn!("Unable to forward new UDP connection: {}", err));
-                tokio::spawn(task);
             }
-            Ok(Async::Ready(Some(())))
-        }).collect()
-            .map(move |_| info!("UDP socket {} was closed", local_address));
-        tokio::spawn(task);
+        });
+    }
+
+    fn spawn_write_task(&self, mut udp_send_half: udp::SendHalf, mut data_receiver: Receiver<(SocketAddr, Bytes)>) {
+        tokio::spawn(async move {
+            loop {
+                let (addr, data) = match data_receiver.recv().await {
+                    Some(m) => m,
+                    None => return info!("Sender task of UDP socket terminaed")
+                };
+                if let Err(err) = udp_send_half.send_to(&data, &addr).await {
+                    return warn!("Unable to send data via UDP: {}", err);
+                }
+            }
+        });
     }
 
     pub fn local_addr(&self) -> Result<SocketAddr> {
-        self.read().inner.local_addr()
-    }
-
-    pub fn send_to(&self, buf: &[u8], remote: &SocketAddr) -> Result<usize> {
-        match self.write().inner.poll_send_to(buf, remote) {
-            Ok(Async::Ready(r)) => Ok(r),
-            Ok(Async::NotReady) => Err(Error::new(ErrorKind::WouldBlock, "Operation would block")),
-            Err(e) => Err(e),
-        }
-    }
-
-    fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr)> {
-        match self.write().inner.poll_recv_from(buf) {
-            Ok(Async::Ready(r)) => Ok(r),
-            Ok(Async::NotReady) => Err(Error::new(ErrorKind::WouldBlock, "Operation would block")),
-            Err(e) => Err(e),
-        }
-    }
-
-    pub fn incoming(&self) -> impl Stream<Item = Connection, Error = ()> {
-        IncomingUdpConnections {
-            socket: self.clone(),
-        }
+        Ok(self.read().upd_address)
     }
 
     pub fn connect(&self, addr: SocketAddr) -> Result<Connection> {
-        let (destination, source) = channel::<Vec<u8>>(10);
+        let (destination, source) = channel::<Bytes>(10);
         self.write().connections.insert(addr, destination);
-        Ok(Connection::new(source, addr, self.clone()))
+        Ok(Connection::new(source, self.read().out.clone(), addr))
     }
 
-    fn forward_or_new_connection(&self, buf: &[u8], remote: SocketAddr) -> Option<Connection> {
-        let mut socket = self.write();
-        if let Some(destination) = socket.connections.get(&remote) {
-            let task = destination
-                .clone()
-                .send(buf.into())
-                .map(|_| ())
-                .map_err(|_| println!("Error when forwarding datagram"));
-            tokio::spawn(task);
+    async fn forward_or_new_connection(&self, buf: Bytes, remote: SocketAddr) -> Option<Connection> {
+        if let Some(destination) = self.read().connections.get_mut(&remote) {
+            if destination.send(buf).await.is_err() {
+                warn!("Error forwarding datagram, receiver half in connection is closed");
+            };
             return None;
         }
-        let (destination, source) = channel::<Vec<u8>>(10);
-        let task = destination
-            .clone()
-            .send(buf.into())
-            .map(|_| ())
-            .map_err(|_| println!("Error when forwarding datagram"));
-        tokio::spawn(task);
-        socket.connections.insert(remote, destination);
-        Some(Connection::new(source, remote, self.clone()))
-    }
-}
-
-struct IncomingUdpConnections {
-    socket: Shared<Socket>,
-}
-
-impl Stream for IncomingUdpConnections {
-    type Item = Connection;
-    type Error = ();
-
-    fn poll(&mut self) -> Poll<Option<Connection>, ()> {
-        self.socket.write().incoming.poll()
+        let (mut destination, source) = channel::<Bytes>(10);
+        if destination.send(buf.into()).await.is_err() {
+            warn!("Error forwarding datagram, receiver half in connection is closed");
+            return None;
+        };
+        self.write().connections.insert(remote, destination);
+        Some(Connection::new(source, self.read().out.clone(), remote))
     }
 }
