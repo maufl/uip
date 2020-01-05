@@ -80,18 +80,18 @@ impl Shared<Socket> {
     }
 
     async fn forward_or_new_connection(&self, buf: Bytes, remote: SocketAddr) -> Option<Connection> {
-        if let Some(destination) = self.read().connections.get_mut(&remote) {
-            if destination.send(buf).await.is_err() {
-                warn!("Error forwarding datagram, receiver half in connection is closed");
-            };
-            return None;
-        }
-        let (mut destination, source) = channel::<Bytes>(10);
+        let (mut destination, connection) = if let Some(dest) = self.read().connections.get(&remote).cloned() {
+            (dest, None)
+        } else {
+            let (destination, source) = channel::<Bytes>(10);
+            let conn = Connection::new(source, self.read().out.clone(), remote);
+            (destination, Some(conn))
+        };
         if destination.send(buf.into()).await.is_err() {
             warn!("Error forwarding datagram, receiver half in connection is closed");
             return None;
         };
         self.write().connections.insert(remote, destination);
-        Some(Connection::new(source, self.read().out.clone(), remote))
+        connection
     }
 }

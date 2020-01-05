@@ -108,9 +108,8 @@ impl Shared<UnixState> {
     }
 
     pub async fn send_frame(&self, host_id: Identifier, src_port: u16, dst_port: u16, data: Bytes) {
-        let res = self.read()
-            .upstream
-            .send((host_id, src_port, dst_port, data))
+        let mut sender = self.write().upstream.clone();
+        let res = sender.send((host_id, src_port, dst_port, data))
             .await;
         if let Err(err) = res {
             warn!("Failed to pass message to upstream: {}", err);
@@ -136,11 +135,14 @@ impl Shared<UnixState> {
             "Received new data from {}:{} to port {} {:?}",
             host_id, remote_port, local_port, data
         );
-        if let Some(socket) = self.read().connections.get_mut(&local_port) {
-            let res = socket.send(Frame::Data(host_id, remote_port, data.to_vec())).await;
-            if res.is_err() {
-                warn!("Unable to deliver frame locally");
-            }
+        let mut socket = if let Some(socket) = self.read().connections.get(&local_port).cloned() {
+            socket
+        } else {
+            return;
+        };
+        let res = socket.send(Frame::Data(host_id, remote_port, data.to_vec())).await;
+        if res.is_err() {
+            warn!("Unable to deliver frame locally");
         }
     }
 

@@ -111,8 +111,7 @@ impl Shared<Socket> {
         identifier: Identifier,
         address: SocketAddr,
     ) -> Result<Connection, io::Error> {
-        let id = &self.read().id;
-        let connector = match connector_for_id(id).configure() {
+        let connector = match connector_for_id(&self.read().id).configure() {
             Ok(c) => c,
             Err(e) => return Err(io::Error::new(io::ErrorKind::Other, "Unable to build TLS client configuration"))
         };

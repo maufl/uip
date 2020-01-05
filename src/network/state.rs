@@ -11,7 +11,7 @@ use std::io;
 use crate::data::{Peer, PeerInformationBase};
 use crate::{Identifier, Identity, Shared};
 use crate::network::LocalAddress;
-use crate::network::transport::{Connection as TransportConnection, Socket};
+use crate::network::transport::{Connection, Socket};
 use crate::network::discovery::discover_addresses;
 use crate::network::change::Listener;
 use crate::network::protocol::Message;
@@ -60,15 +60,17 @@ impl Shared<NetworkState> {
             .iter_mut()
             .for_each(|address| address.internal.set_port(port));
         self.close_stale_sockets(&addresses);
-        let new_addresses = addresses
+        let new_addresses: Vec<LocalAddress> = addresses
             .iter()
             .filter(|address| !self.read().sockets.contains_key(&address.internal))
             .filter(|address| match address.internal.ip() {
                 IpAddr::V4(_) => true,
                 IpAddr::V6(v6) => v6.is_global(),
-            });
+            })
+            .cloned()
+            .collect();
         for address in new_addresses {
-            if let Err(err) = self.open_socket(*address).await {
+            if let Err(err) = self.open_socket(address).await {
                  warn!("Error while opening socket: {}", err);
             }
         }
@@ -116,8 +118,10 @@ impl Shared<NetworkState> {
 
     async fn publish_addresses(&self) {
         let peer_information = self.my_peer_information();
-        for socket in self.read().sockets.values() {
-            for connection in socket.read().connections.values_mut() {
+        let sockets: Vec<Shared<Socket>> = self.read().sockets.values().cloned().collect();
+        for socket in sockets {
+            let connections: Vec<Connection> = socket.read().connections.values().cloned().collect();
+            for mut connection in connections {
                 connection.send_peer_info(peer_information.clone()).await;
             }
         }
@@ -125,8 +129,9 @@ impl Shared<NetworkState> {
 
     async fn open_socket(&self, address: LocalAddress) -> io::Result<()> {
         debug!("Opening new socket on address {:?}", address);
+        let id = self.read().id.clone();
         let (data_sender, mut data_receiver) = tokio::sync::mpsc::channel::<(Identifier, u16, u16, Bytes)>(10);
-        let socket = Shared::<Socket>::open( address, self.read().id.clone(), data_sender).await?;
+        let socket = Shared::<Socket>::open( address, id, data_sender).await?;
         self.write()
             .sockets
             .insert(address.internal, socket.clone());
@@ -145,7 +150,6 @@ impl Shared<NetworkState> {
     }
 
     async fn observe_network_changes(&self) -> Result<(),()> {
-        let state = self.clone();
         let listener = match Listener::new() {
             Ok(l) => l,
             Err(err) => {
@@ -156,7 +160,7 @@ impl Shared<NetworkState> {
         let mut change_stream = listener.debounce(Duration::from_millis(2000));
         while change_stream.next().await.is_some() {
             info!("Network changed");
-            state.open_new_sockets().await;
+            self.open_new_sockets().await;
         };
         Ok(())
     }
@@ -172,7 +176,8 @@ impl Shared<NetworkState> {
     }
 
     pub async fn connect_to_relays_on_socket(&self, socket: &Shared<Socket>) {
-        for relay in &self.read().relays {
+        let relays: Vec<Identifier> = self.read().relays.clone();
+        for relay in &relays {
             if socket.get_connection(relay).is_some() {
                 continue;
             };
@@ -193,7 +198,7 @@ impl Shared<NetworkState> {
     async fn connect(
         &self,
         remote_id: Identifier,
-    ) -> Result<TransportConnection, io::Error> {
+    ) -> Result<Connection, io::Error> {
         let addr = self.read().pib
             .lookup_peer_address(&remote_id)
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "peer address not found"))?;
@@ -204,7 +209,7 @@ impl Shared<NetworkState> {
         &self,
         remote_id: Identifier,
         address: SocketAddr,
-    ) -> Result<TransportConnection, io::Error> {
+    ) -> Result<Connection, io::Error> {
         let socket = self.read()
             .sockets
             .iter()
@@ -222,7 +227,8 @@ impl Shared<NetworkState> {
         if src_port == 0 && dst_port == 0 {
             return self.process_control_message(host_id, data).await;
         }
-        if let Err(err) = self.read().upstream.send((host_id, src_port, dst_port, data)).await {
+        let mut upstream = self.write().upstream.clone();
+        if let Err(err) = upstream.send((host_id, src_port, dst_port, data)).await {
             warn!("Failed to pass message to upstream: {}", err);
         }
     }
@@ -279,7 +285,7 @@ impl Shared<NetworkState> {
     pub async fn get_connection(
         &self,
         host_id: Identifier,
-    ) -> Result<TransportConnection, io::Error> {
+    ) -> Result<Connection, io::Error> {
         let optional_connection = self.read()
             .sockets
             .values()

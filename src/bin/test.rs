@@ -15,7 +15,7 @@ fn main() {
     let socket_addr = "192.168.2.15:31337"
         .parse()
         .expect("Invalid socket address");
-    let gateway = search_gateway().expect("Unable to find gateway");
+    let gateway = search_gateway(Default::default()).expect("Unable to find gateway");
     gateway
         .add_any_port(PortMappingProtocol::UDP, socket_addr, 100u32, "Test")
         .expect("Unable to add portmapping");
