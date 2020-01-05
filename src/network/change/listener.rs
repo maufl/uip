@@ -9,6 +9,7 @@ use tokio::stream::Stream;
 use pin_project_lite::pin_project;
 
 use crate::network::change::rtnetlink_socket::RTNetlinkSocket;
+use crate::network::change::debounce;
 
 pub const RTMGRP_IPV4_ROUTE: u32 = 0x40;
 pub const RTMGRP_IPV6_ROUTE: u32 = 0x400;
@@ -27,7 +28,7 @@ impl Listener {
     }
 
     pub fn debounce(self, duration: Duration) -> impl Stream<Item=()> {
-        throttle(duration, self)
+        debounce(self, duration)
     }
 }
 
