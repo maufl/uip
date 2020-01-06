@@ -1,5 +1,4 @@
 use tokio;
-use tokio::prelude::*;
 use tokio::net::{UdpSocket, udp};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use std::collections::HashMap;
@@ -49,7 +48,9 @@ impl Shared<Socket> {
                 };
                 bytes.truncate(size);
                 if let Some(connection) = socket.forward_or_new_connection(bytes.freeze(), remote_addr).await {
-                    connection_sender.send(connection).await;
+                    if connection_sender.send(connection).await.is_err() {
+                        return warn!("Unable to forward new connections");
+                    }
                 }
             }
         });

@@ -9,10 +9,8 @@ use uip::{
     UnixState
 };
 
-use std::fs::File;
 use std::path::Path;
 use bytes::Bytes;
-use tokio::runtime::Runtime;
 use clap::{App, Arg, SubCommand};
 use futures_util::StreamExt;
 
@@ -91,11 +89,15 @@ async fn main() {
     let unix_clone = unix.clone();
     tokio::spawn(async move {
         info!("Starting unix forwarding");
-        unix_clone.run().await;
+        if let Err(err) = unix_clone.run().await {
+            error!("Error opening UNIX socket: {}", err);
+        }
     });
 
     info!("Starting client for ID {}", config.id.identifier);
-    tokio::signal::ctrl_c().await;
+    if let Err(err) = tokio::signal::ctrl_c().await {
+        warn!("Unable to listen for CTRL-C signal: {}", err);
+    }
 
     let config = Configuration{
         id: config.id,

@@ -1,10 +1,8 @@
-use std::io::{Error, Result};
+use std::io::{Result};
 use std::time::Duration;
 use std::pin::Pin;
 use std::task::{Context,Poll};
 
-use tokio::prelude::*;
-use tokio::time::throttle;
 use tokio::stream::Stream;
 use pin_project_lite::pin_project;
 

@@ -1,6 +1,6 @@
 use tokio_util::codec::{Decoder,Encoder};
 use std::io::{Error, ErrorKind};
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use byteorder::{BigEndian, ByteOrder};
 
 pub enum Frame {
@@ -50,11 +50,11 @@ impl Decoder for Codec {
         };
         match typ {
             1 => {
-                src.split_to(1);
+                src.advance(1);
                 return Ok(Some(Frame::Ping));
             }
             2 => {
-                src.split_to(1);
+                src.advance(1);
                 return Ok(Some(Frame::Pong));
             }
             3 => {}
@@ -69,7 +69,7 @@ impl Decoder for Codec {
         if src.len() < 7 + length {
             return Ok(None);
         }
-        src.split_to(7);
+        src.advance(7);
         Ok(Some(Frame::Data {
             src_port: src_port,
             dst_port: dst_port,

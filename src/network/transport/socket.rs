@@ -1,10 +1,9 @@
 use std::collections::HashMap;
 use std::io;
-use std::error::Error;
 use std::string::ToString;
 use std::net::SocketAddr;
 use openssl::ssl::{SslAcceptor, SslConnector, SslMethod, SslVerifyMode};
-use bytes::{BytesMut,Bytes};
+use bytes::{Bytes};
 use tokio;
 use tokio::sync::mpsc::Sender;
 use tokio::stream::StreamExt;
@@ -59,13 +58,14 @@ impl Shared<Socket> {
     {
         let (shared_socket, incomming_connections) = Shared::<IoSocket>::bind(address).await?;
         let socket = Socket::new(shared_socket.clone(), address, deliver_frame, id).shared();
-        socket.spawn_accept_connections_task(incomming_connections);
-        socket.request_external_address();
+        socket.spawn_accept_connections_task(incomming_connections)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("Unable to spawn DTLS acceptor: {}", e)))?;
+        socket.request_external_address().await;
         Ok(socket)
     }
 
-    fn spawn_accept_connections_task(&self, mut incomming_connections: tokio::sync::mpsc::Receiver<crate::network::io::Connection>) {
-        let acceptor = acceptor_for_id(&self.read().id);
+    fn spawn_accept_connections_task(&self, mut incomming_connections: tokio::sync::mpsc::Receiver<crate::network::io::Connection>) -> Result<(), openssl::error::ErrorStack> {
+        let acceptor = acceptor_for_id(&self.read().id)?;
         let socket = self.clone();
         tokio::spawn(async move {
             loop {
@@ -95,6 +95,7 @@ impl Shared<Socket> {
                 socket.write().connections.insert(id, conn);
             }
         });
+        Ok(())
     }
 
     pub fn close(&self) {
@@ -113,7 +114,7 @@ impl Shared<Socket> {
     ) -> Result<Connection, io::Error> {
         let connector = match connector_for_id(&self.read().id).configure() {
             Ok(c) => c,
-            Err(e) => return Err(io::Error::new(io::ErrorKind::Other, "Unable to build TLS client configuration"))
+            Err(e) => return Err(io::Error::new(io::ErrorKind::Other, format!("Unable to build TLS client configuration: {}", e)))
         };
         let conn = self.read().io_socket.connect(address)?;
         let ssl_stream = match tokio_openssl::connect(connector, &identifier.to_string(), conn).await {
@@ -161,15 +162,15 @@ where
         .map_err(|err| format!("Unable to generate identifier from certificate: {}", err))
 }
 
-fn acceptor_for_id(id: &Identity) -> SslAcceptor {
+fn acceptor_for_id(id: &Identity) -> Result<SslAcceptor, openssl::error::ErrorStack> {
     let mut builder =
         SslAcceptor::mozilla_modern(SslMethod::dtls()).expect("Unable to build new SSL acceptor");
-    builder.set_private_key(&id.key);
-    builder.set_certificate(id.cert.as_ref());
+    builder.set_private_key(&id.key)?;
+    builder.set_certificate(id.cert.as_ref())?;
     builder.set_verify_callback(SslVerifyMode::PEER, |_valid, context| {
         context.current_cert().is_some()
     });
-    builder.build()
+    Ok(builder.build())
 }
 
 fn connector_for_id(id: &Identity) -> SslConnector {

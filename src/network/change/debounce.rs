@@ -1,7 +1,6 @@
 use std::time::{Duration, Instant};
 use std::task::{Context,Poll};
 use std::pin::Pin;
-use std::marker::Unpin;
 
 use tokio::stream::Stream;
 use pin_project_lite::pin_project;

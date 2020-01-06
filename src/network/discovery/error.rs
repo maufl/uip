@@ -5,8 +5,7 @@ use igd::{SearchError, AddAnyPortError};
 #[derive(Clone, Debug)]
 pub enum AddressDiscoveryError {
     IgdError(String),
-    InterfacesError(String),
-    UnsupportedAddress(String),
+    InterfacesError(String)
 }
 
 impl Display for AddressDiscoveryError {
@@ -19,8 +18,7 @@ impl Error for AddressDiscoveryError {
     fn description(&self) -> &str {
         match *self {
             AddressDiscoveryError::IgdError(ref string) |
-            AddressDiscoveryError::InterfacesError(ref string) |
-            AddressDiscoveryError::UnsupportedAddress(ref string) => string,
+            AddressDiscoveryError::InterfacesError(ref string) => string,
         }
     }
 }

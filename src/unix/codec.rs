@@ -1,7 +1,7 @@
 use std::io::{Error, ErrorKind, Result};
 use serde::Serialize;
 use rmp_serde::{from_slice, Serializer};
-use bytes::BytesMut;
+use bytes::{Buf, BytesMut};
 use tokio_util::codec::{Decoder, Encoder};
 use crate::Identifier;
 
@@ -40,7 +40,7 @@ impl Decoder for ControlProtocolCodec {
         frame
             .serialize(&mut Serializer::new(&mut tmp))
             .expect("Error reserializing parsed frame");
-        buf.split_to(tmp.len());
+        buf.advance(tmp.len());
         Ok(Some(frame))
     }
 }

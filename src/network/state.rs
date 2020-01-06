@@ -2,10 +2,9 @@ use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 use std::collections::HashMap;
 use tokio;
-use tokio::prelude::*;
 use tokio::stream::StreamExt;
 use tokio::sync::mpsc::Sender;
-use bytes::{BytesMut, Bytes};
+use bytes::{Bytes};
 use std::io;
 
 use crate::data::{Peer, PeerInformationBase};
@@ -299,6 +298,8 @@ impl Shared<NetworkState> {
 
     pub async fn run(&self) {
         self.open_new_sockets().await;
-        self.observe_network_changes().await;
+        if self.observe_network_changes().await.is_err() {
+            warn!("Unable to observe network changes");
+        }
     }
 }

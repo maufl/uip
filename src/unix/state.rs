@@ -3,10 +3,8 @@ use tokio::sync::mpsc::{channel, Sender};
 use tokio::net::{UnixListener, UnixStream};
 use tokio_util::codec::{FramedRead,FramedWrite};
 use tokio;
-use tokio::prelude::*;
-use futures::{pin_mut, Sink, future::poll_fn};
 use futures_util::StreamExt;
-use bytes::{Bytes,BytesMut};
+use bytes::{Bytes};
 use std::io::{Error};
 use std::path::Path;
 use std::fs;
@@ -61,13 +59,15 @@ impl Shared<UnixState> {
         let mut listener = UnixListener::bind(&self.read().ctl_socket)?;
         loop {
             let (con, _addr) = listener.accept().await?;
-            self.handle_new_stream(con).await;
+            if self.handle_new_stream(con).await.is_err() {
+                warn!("Unable to accept new unix connection");
+            }
         }
     }
 
     pub async fn handle_new_stream(
         &self,
-        mut connection: UnixStream,
+        connection: UnixStream,
     ) -> Result<(), Error> {
         let (read_half, write_half) = tokio::io::split(connection);
         let mut read_half = FramedRead::new(read_half, ControlProtocolCodec{});
@@ -81,7 +81,7 @@ impl Shared<UnixState> {
             Some(Ok(Frame::Data(_,_,_))) => warn!("Received data on an unix connection that was not bound"),
             Some(Ok(Frame::Error(err))) => warn!("Received an error on an unix connection tat was not bound: {:?}", err),
             Some(Err(err)) => warn!("Error in unix stream: {}", err),
-            None => {},
+            None => warn!("Unix stream connection went away before sending data."),
         };
         Ok(())
     }
@@ -103,7 +103,9 @@ impl Shared<UnixState> {
         let (sender, receiver) = channel::<Frame>(10);
         self.write().connections.insert(src_port, sender);
         tokio::spawn(async move {
-            receiver.map(|f| Ok(f)).forward(write_half).await;
+            if let Err(err) = receiver.map(|f| Ok(f)).forward(write_half).await {
+                warn!("Forwarding data frame to local Unix connection failed: {}", err);
+            }
         });
     }
 

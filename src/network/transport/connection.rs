@@ -1,15 +1,13 @@
 use tokio;
 use tokio::prelude::*;
-use tokio::time::interval;
 use tokio::sync::mpsc::{channel, Sender, Receiver};
 use tokio::sync::mpsc::error::SendError;
 use tokio::io::split;
 use tokio_util::codec::{FramedRead,FramedWrite};
 use tokio_openssl::SslStream;
-use futures::{Sink, pin_mut, future::poll_fn};
 use futures_util::StreamExt;
 use bytes::{BytesMut, Bytes};
-use std::time::{Duration, Instant};
+use std::time::{Duration};
 
 use super::codec::{Codec, Frame};
 use crate::data::Peer;
@@ -55,7 +53,7 @@ impl Connection {
                 match frame {
                     Frame::Ping => {
                         debug!("Received ping from {}", remote_id);
-                        connection.send_frame(Frame::Pong);
+                        connection.send_frame(Frame::Pong).await;
                     }
                     Frame::Pong => debug!("Received pong from {}", remote_id),
                     Frame::Data {
@@ -125,7 +123,9 @@ impl Connection {
             }
             Ok(buf) => buf,
         };
-        self.send_data_frame(0, 0, buf.freeze()).await;
+        if self.send_data_frame(0, 0, buf.freeze()).await.is_err() {
+            warn!("Unable to send data frame, pipe broken?");
+        }
     }
 
     pub async fn send_peer_info_request(&mut self, peer_id: &Identifier) {
