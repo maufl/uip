@@ -100,7 +100,9 @@ impl Shared<Socket> {
 
     pub fn close(&self) {
         debug!("Closing transport socket");
-        self.write().connections.clear();
+        let mut socket = self.write();
+        socket.io_socket.close();
+        socket.connections.clear();
     }
 
     pub fn get_connection(&self, identifier: &Identifier) -> Option<Connection> {

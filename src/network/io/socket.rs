@@ -1,6 +1,8 @@
 use tokio;
 use tokio::net::{UdpSocket, udp};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
+use tokio::sync::broadcast;
+use futures::future::FutureExt;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::io::{Result};
@@ -15,7 +17,8 @@ pub struct Socket {
     connections: HashMap<SocketAddr, Sender<Bytes>>,
     out: Sender<(SocketAddr, Bytes)>,
     address: LocalAddress,
-    upd_address: SocketAddr
+    upd_address: SocketAddr,
+    close_sender: broadcast::Sender<()>
 }
 
 impl Shared<Socket> {
@@ -25,24 +28,31 @@ impl Shared<Socket> {
         let (udp_receive_half, udp_send_half) = socket.split();     
         let (connection_sender, connection_receiver) = channel::<Connection>(10);
         let (data_sender, data_receiver) = channel::<(SocketAddr, Bytes)>(10);
+        let (close_sender, close_receiver) = broadcast::channel::<()>(1);
+        let second_close_receiver = close_sender.subscribe();
         let socket = Shared::new(Socket {
             connections: HashMap::new(),
             out: data_sender,
             address: addr,
-            upd_address: upd_address
+            upd_address: upd_address,
+            close_sender: close_sender
         });
-        socket.spawn_read_task(udp_receive_half, connection_sender);
-        socket.spawn_write_task(udp_send_half, data_receiver);
+        socket.spawn_read_task(udp_receive_half, connection_sender, close_receiver);
+        socket.spawn_write_task(udp_send_half, data_receiver, second_close_receiver);
         Ok((socket, connection_receiver))
     }
 
-    fn spawn_read_task(&self, mut udp_receive_half: udp::RecvHalf, mut connection_sender: Sender<Connection>) {
+    fn spawn_read_task(&self, mut udp_receive_half: udp::RecvHalf, mut connection_sender: Sender<Connection>, mut close_receiver: broadcast::Receiver<()>) {
         let socket = self.clone();
         tokio::spawn(async move {
             loop {
                 let mut bytes = BytesMut::new();
                 bytes.resize(1_500_000, 0);
-                let (size, remote_addr) = match udp_receive_half.recv_from(&mut bytes).await {
+                let res = futures_util::select! {
+                    res = udp_receive_half.recv_from(&mut bytes).fuse() => res,
+                    _ = close_receiver.recv().fuse() => return info!("Shared UDP socket closed"),
+                };
+                let (size, remote_addr) = match res {
                     Ok(r) => r,
                     Err(err) => return warn!("Receiver task of UDP socket terminated with error {}", err)
                 };
@@ -56,10 +66,14 @@ impl Shared<Socket> {
         });
     }
 
-    fn spawn_write_task(&self, mut udp_send_half: udp::SendHalf, mut data_receiver: Receiver<(SocketAddr, Bytes)>) {
+    fn spawn_write_task(&self, mut udp_send_half: udp::SendHalf, mut data_receiver: Receiver<(SocketAddr, Bytes)>, mut close_receiver: broadcast::Receiver<()>) {
         tokio::spawn(async move {
             loop {
-                let (addr, data) = match data_receiver.recv().await {
+                let res = futures_util::select! {
+                    res = data_receiver.recv().fuse() => res,
+                    _ = close_receiver.recv().fuse() => return info!("Shared UDP socket closed"),
+                };
+                let (addr, data) = match res {
                     Some(m) => m,
                     None => return info!("Sender task of UDP socket terminaed")
                 };
@@ -68,6 +82,10 @@ impl Shared<Socket> {
                 }
             }
         });
+    }
+
+    pub fn close(&self) {
+        let _ = self.write().close_sender.send(());
     }
 
     pub fn local_addr(&self) -> Result<SocketAddr> {
