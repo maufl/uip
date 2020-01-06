@@ -36,7 +36,7 @@ async fn main() {
 
     let matches = app().get_matches();
 
-    let config_file_path = matches.value_of("config").unwrap_or(".server.json");
+    let config_file_path = matches.value_of("config").unwrap_or(".server.toml");
 
     if Some("generate-config") == matches.subcommand_name() {
         return generate_configuration(config_file_path);
@@ -134,19 +134,14 @@ fn generate_configuration(config_file_path: &str) {
 }
 
 fn read_configuration(path: String) -> Result<Configuration, String> {
-    let config_file = match File::open(path) {
-        Ok(file) => file,
-        Err(err) => {
-            return Err(format!("Error while opening configuration file: {}", err));
-        }
-    };
-    serde_json::from_reader(config_file)
-        .map_err(|err| format!("Error while reading configuration file: {}", err))
+    let config_content = std::fs::read_to_string(path)
+        .map_err(|err| format!("Unable to read configuration file: {}", err))?;
+    toml::from_str(&config_content)
+        .map_err(|err| format!("Unable to deserialize configuration file: {}", err))
 }
 fn write_configuration(path: &str, conf: &Configuration) -> Result<(), String> {
-    let config_file = File::create(path)
-        .map_err(|err| format!("Error while opening configuration file: {}", err))?;
-    serde_json::to_writer_pretty(config_file, conf)
-        .map(|_| ())
-        .map_err(|err| format!("Error while reading configuration file: {}", err))
+    let config_content = toml::to_string_pretty(conf)
+        .map_err(|err| format!("Error serializing configuration: {}", err))?;
+    std::fs::write(path, config_content)
+        .map_err(|err| format!("Error writing configuration file: {}", err))
 }
