@@ -137,6 +137,7 @@ impl Shared<Socket> {
             Err(err) => return warn!("Unable to request external address: {}", err)
         };
         self.write().address.external = Some(SocketAddr::V4(external));
+        info!("Have new external address {:?}", self.read().address);
     }
 
     pub fn public_address(&self) -> Option<SocketAddr> {

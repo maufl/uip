@@ -9,7 +9,7 @@ default-run = "uipd"
 interfaces = "0.0.4"
 bytes = "0.5"
 byteorder = "1"
-igd = { git = "https://github.com/maufl/rust-igd", branch = "update-hyper", features = ["aio"] }
+igd = { path = "/home/maufl/Code/rust-igd", features = ["aio"] }
 futures = { version = "0.3" }
 futures-util = { version = "0.3" }
 tokio = { version = "0.2.6", features = ["full"] }
