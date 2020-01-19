@@ -3,11 +3,9 @@ use std::task::{Context, Poll};
 use std::pin::Pin;
 
 use nix;
-use nix::sys::socket::{bind, socket, AddressFamily, MsgFlags, SockAddr, SockType, SOCK_CLOEXEC,
-                       SOCK_NONBLOCK};
+use nix::sys::socket::{bind, socket, AddressFamily, MsgFlags, SockAddr, SockType, SockFlag};
 use nix::unistd::Pid;
 use nix::pty::SessionId;
-use libc::NETLINK_ROUTE;
 use bytes::BytesMut;
 use tokio::io::PollEvented;
 use tokio::stream::Stream;
@@ -29,8 +27,8 @@ pub struct RTNetlinkSocket {
 impl RTNetlinkSocket {
     /// Creates a netlink route socket that sends messages for all given groups
     pub fn bind(groups: u32) -> Result<RTNetlinkSocket> {
-        let flags = SOCK_CLOEXEC | SOCK_NONBLOCK;
-        let sock = socket(AddressFamily::Netlink, SockType::Raw, flags, NETLINK_ROUTE)
+        let flags = SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK;
+        let sock = socket(AddressFamily::Netlink, SockType::Raw, flags, None)
             .map_err(nix_error_to_io_error)?;
         let pid = SessionId::from(Pid::this()) as u32;
         let addr = SockAddr::new_netlink(pid, groups);
