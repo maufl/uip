@@ -12,7 +12,7 @@ byteorder = "1"
 igd = { path = "/home/maufl/Code/rust-igd", features = ["aio"] }
 futures = { version = "0.3" }
 futures-util = { version = "0.3" }
-tokio = { version = "0.2.6", features = ["full"] }
+tokio = { version = "0.2", features = ["full"] }
 tokio-util = { version = "0.2", features = [ "full" ] }
 tokio-openssl = "0.4"
 pin-project-lite = "0.1"
