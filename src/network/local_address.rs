@@ -1,6 +1,6 @@
-use std::net::SocketAddr;
-use std::fmt;
 use std::cmp::min;
+use std::fmt;
+use std::net::SocketAddrV6;
 
 const INTERFACE_NAME_SIZE: usize = 16;
 
@@ -37,23 +37,14 @@ impl InterfaceName {
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
 pub struct LocalAddress {
     pub interface: InterfaceName,
-    pub internal: SocketAddr,
-    pub gateway: Option<SocketAddr>,
-    pub external: Option<SocketAddr>,
+    pub address: SocketAddrV6,
 }
 
 impl LocalAddress {
-    pub fn new<S: AsRef<[u8]>>(
-        interface: S,
-        internal: SocketAddr,
-        gateway: Option<SocketAddr>,
-        external: Option<SocketAddr>,
-    ) -> LocalAddress {
+    pub fn new<S: AsRef<[u8]>>(interface: S, address: SocketAddrV6) -> LocalAddress {
         LocalAddress {
             interface: InterfaceName::copy_from_slice(interface.as_ref()),
-            internal: internal,
-            gateway: gateway,
-            external: external,
+            address: address,
         }
     }
 }

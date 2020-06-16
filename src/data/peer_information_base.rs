@@ -1,8 +1,8 @@
-use std::net::SocketAddr;
 use std::collections::HashMap;
+use std::net::SocketAddrV6;
 
-use crate::Identifier;
 use super::Peer;
+use crate::Identifier;
 
 #[derive(Serialize, Deserialize, Clone, Default, Debug)]
 pub struct PeerInformationBase {
@@ -12,7 +12,9 @@ pub struct PeerInformationBase {
 #[allow(dead_code)]
 impl PeerInformationBase {
     pub fn new() -> PeerInformationBase {
-        PeerInformationBase { peers: HashMap::new() }
+        PeerInformationBase {
+            peers: HashMap::new(),
+        }
     }
 
     pub fn add_peer(&mut self, id: Identifier, peer: Peer) {
@@ -23,13 +25,13 @@ impl PeerInformationBase {
         self.peers.get(id)
     }
 
-    pub fn lookup_peer_address(&self, id: &Identifier) -> Option<SocketAddr> {
+    pub fn lookup_peer_address(&self, id: &Identifier) -> Option<SocketAddrV6> {
         self.get_peer(id)
             .and_then(|peer| peer.addresses.first())
             .cloned()
     }
 
-    pub fn add_peer_address(&mut self, id: Identifier, addr: SocketAddr) {
+    pub fn add_peer_address(&mut self, id: Identifier, addr: SocketAddrV6) {
         self.peers
             .entry(id)
             .or_insert_with(|| Peer::new(id, vec![], vec![]))
