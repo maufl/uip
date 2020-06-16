@@ -134,7 +134,10 @@ impl Shared<NetworkState> {
         self.write()
             .sockets
             .insert(address.internal, socket.clone());
-        self.connect_to_relays_on_socket(&socket).await;
+        let state = self.clone();
+        tokio::spawn(async move {
+            state.connect_to_relays_on_socket(&socket).await;
+        });
         let state = self.clone();
         tokio::spawn(async move {
             loop {
@@ -182,8 +185,13 @@ impl Shared<NetworkState> {
             };
             let addr = match self.read().pib.lookup_peer_address(relay) {
                 Some(info) => info,
-                None => continue,
+                None => { warn!("Unable to connect to relay {}, no peer information available.", relay); continue },
             };
+            let socket_address = socket.local_address();
+            if addr.is_ipv4() != socket_address.is_ipv4() {
+                debug!("Unable to connect on socket with different IP version");
+                continue;
+            }
             info!("Connecting to relay {}", relay);
             let relay = *relay;
             let state = self.clone();

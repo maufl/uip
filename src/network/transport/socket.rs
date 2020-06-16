@@ -151,6 +151,10 @@ impl Shared<Socket> {
         }
         None
     }
+
+    pub fn local_address(&self) -> SocketAddr {
+        self.read().address.internal
+    }
 }
 
 fn id_from_connection<S>(connection: &SslStream<S>) -> Result<Identifier, String>
