@@ -1,13 +1,14 @@
+use bytes::{Bytes, BytesMut};
+use futures::FutureExt;
+use futures_util::{SinkExt, StreamExt};
+use std::time::Duration;
 use tokio;
-use tokio::prelude::*;
-use tokio::sync::mpsc::{channel, Sender, Receiver};
-use tokio::sync::mpsc::error::SendError;
 use tokio::io::split;
-use tokio_util::codec::{FramedRead,FramedWrite};
+use tokio::prelude::*;
+use tokio::sync::mpsc::error::SendError;
+use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio_openssl::SslStream;
-use futures_util::StreamExt;
-use bytes::{BytesMut, Bytes};
-use std::time::{Duration};
+use tokio_util::codec::{FramedRead, FramedWrite};
 
 use super::codec::{Codec, Frame};
 use crate::data::Peer;
@@ -33,22 +34,33 @@ impl Connection {
         let write_half = FramedWrite::new(write_half, Codec());
         let (sender, receiver) = channel::<Frame>(10);
         let conn = Connection { sink: sender };
-        conn.spawn_read_task(remote_id, read_half, data_sink);
-        conn.spawn_write_task(receiver, write_half);
-        conn.spawn_ping_task();
+        let (close_sender, close_receiver) = tokio::sync::watch::channel(());
+        conn.spawn_read_task(remote_id, read_half, data_sink, close_sender);
+        conn.spawn_write_task(receiver, write_half, close_receiver.clone());
+        conn.spawn_ping_task(close_receiver);
         conn
     }
 
-    fn spawn_read_task<S>(&self, remote_id: Identifier, mut read_half: FramedRead<tokio::io::ReadHalf<SslStream<S>>, Codec>, mut data_sink: Sender<(Identifier, u16, u16, Bytes)>) 
-    where
-        S: AsyncRead + AsyncWrite + Send + Unpin + 'static {
+    fn spawn_read_task<S>(
+        &self,
+        remote_id: Identifier,
+        mut read_half: FramedRead<tokio::io::ReadHalf<SslStream<S>>, Codec>,
+        mut data_sink: Sender<(Identifier, u16, u16, Bytes)>,
+        mut close_sender: tokio::sync::watch::Sender<()>,
+    ) where
+        S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
+    {
         let mut connection = self.clone();
         tokio::spawn(async move {
             loop {
-                let frame = match read_half.next().await {
-                    Some(Ok(f)) => f,
-                    Some(Err(e)) => return warn!("Error while receiving frame: {}", e),
-                    None => return
+                let timeout = tokio::time::delay_for(tokio::time::Duration::from_secs(20));
+                let frame = futures_util::select! {
+                    maybe_frame = read_half.next().fuse() => match maybe_frame {
+                        Some(Ok(f)) => f,
+                        Some(Err(e)) => return warn!("Error while receiving frame: {}", e),
+                        None => return
+                    },
+                    _ = timeout.fuse() => return warn!("Connection timed out")
                 };
                 match frame {
                     Frame::Ping => {
@@ -60,31 +72,54 @@ impl Connection {
                         src_port,
                         dst_port,
                         data,
-                    } => if data_sink.send((remote_id, src_port, dst_port, data)).await.is_err() {
-                        return info!("Upstream closed the data sink");
+                    } => {
+                        if data_sink
+                            .send((remote_id, src_port, dst_port, data))
+                            .await
+                            .is_err()
+                        {
+                            close_sender.broadcast(());
+                            return info!("Upstream closed the data sink");
+                        }
                     }
                 }
             }
         });
     }
 
-    fn spawn_write_task<S>(&self, receiver: Receiver<Frame>, write_half: FramedWrite<tokio::io::WriteHalf<SslStream<S>>, Codec>)
-    where
+    fn spawn_write_task<S>(
+        &self,
+        mut receiver: Receiver<Frame>,
+        mut write_half: FramedWrite<tokio::io::WriteHalf<SslStream<S>>, Codec>,
+        mut close_receiver: tokio::sync::watch::Receiver<()>,
+    ) where
         S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
-     {
+    {
         tokio::spawn(async move {
-            if let Err(err) = receiver.map(|f| Ok(f)).forward(write_half).await {
-                warn!("Error forwarding frames: {}", err);
+            loop {
+                let frame = futures_util::select! {
+                        maybe_frame = receiver.recv().fuse() => match maybe_frame {
+                        Some(f) => f,
+                        None => return,
+                    },
+                    _ = close_receiver.recv().fuse() => return
+                };
+                if let Err(err) = write_half.send(frame).await {
+                    return warn!("Error forwarding frame: {}", err);
+                };
             }
         });
     }
-    
-    fn spawn_ping_task(&self) {
+    fn spawn_ping_task(&self, mut close_receiver: tokio::sync::watch::Receiver<()>) {
         let mut connection = self.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(15));
             loop {
-                if interval.next().await.is_none() {
+                let next = futures_util::select! {
+                    next = interval.next().fuse() => next,
+                    _ = close_receiver.recv().fuse() => return,
+                };
+                if next.is_none() {
                     return info!("Stop ping task");
                 };
                 connection.send_frame(Frame::Ping).await;
@@ -105,11 +140,13 @@ impl Connection {
         data: Bytes,
     ) -> Result<(), SendError<Frame>> {
         debug!("Sending frame from port {} to port {}", src_port, dst_port);
-        self.sink.send(Frame::Data {
-            src_port: src_port,
-            dst_port: dst_port,
-            data: data,
-        }).await
+        self.sink
+            .send(Frame::Data {
+                src_port: src_port,
+                dst_port: dst_port,
+                data: data,
+            })
+            .await
     }
 
     pub async fn send_control_message(&mut self, msg: Message) {
