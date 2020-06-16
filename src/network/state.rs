@@ -186,11 +186,14 @@ impl Shared<NetworkState> {
                     continue;
                 }
             };
-            info!("Connecting to relay {}", relay);
+            info!("Connecting to relay {} at {}", relay, addr);
             let relay = *relay;
             let state = self.clone();
             match socket.open_connection(relay, addr).await {
-                Ok(mut conn) => conn.send_peer_info(state.my_peer_information()).await,
+                Ok(mut conn) => {
+                    conn.send_peer_info(state.my_peer_information()).await;
+                    info!("Connected to relay")
+                }
                 Err(err) => warn!("Unable to connect to peer {}: {}", relay, err),
             };
         }
