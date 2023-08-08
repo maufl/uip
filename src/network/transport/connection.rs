@@ -1,13 +1,15 @@
 use bytes::{Bytes, BytesMut};
 use futures::FutureExt;
-use futures_util::{SinkExt, StreamExt};
+use futures_util::SinkExt;
+use std::pin::Pin;
 use std::time::Duration;
 use tokio;
-use tokio::io::split;
-use tokio::prelude::*;
+use tokio::io::{split, AsyncRead, AsyncWrite};
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
+use tokio::time::Instant;
 use tokio_openssl::SslStream;
+use tokio_stream::StreamExt;
 use tokio_util::codec::{FramedRead, FramedWrite};
 
 use super::codec::{Codec, Frame};
@@ -22,7 +24,7 @@ pub struct Connection {
 
 impl Connection {
     pub fn from_tls_stream<S>(
-        stream: SslStream<S>,
+        stream: Pin<&mut SslStream<S>>,
         remote_id: Identifier,
         data_sink: Sender<(Identifier, u16, u16, Bytes)>,
     ) -> Connection
@@ -44,7 +46,7 @@ impl Connection {
     fn spawn_read_task<S>(
         &self,
         remote_id: Identifier,
-        mut read_half: FramedRead<tokio::io::ReadHalf<SslStream<S>>, Codec>,
+        mut read_half: FramedRead<tokio::io::ReadHalf<Pin<&mut SslStream<S>>>, Codec>,
         mut data_sink: Sender<(Identifier, u16, u16, Bytes)>,
         mut close_sender: tokio::sync::watch::Sender<()>,
     ) where
@@ -53,7 +55,8 @@ impl Connection {
         let mut connection = self.clone();
         tokio::spawn(async move {
             loop {
-                let timeout = tokio::time::delay_for(tokio::time::Duration::from_secs(20));
+                let timeout =
+                    tokio::time::sleep_until(Instant::now() + tokio::time::Duration::from_secs(20));
                 let frame = futures_util::select! {
                     maybe_frame = read_half.next().fuse() => match maybe_frame {
                         Some(Ok(f)) => f,
@@ -78,7 +81,7 @@ impl Connection {
                             .await
                             .is_err()
                         {
-                            close_sender.broadcast(());
+                            close_sender.send(());
                             return info!("Upstream closed the data sink");
                         }
                     }
@@ -90,7 +93,7 @@ impl Connection {
     fn spawn_write_task<S>(
         &self,
         mut receiver: Receiver<Frame>,
-        mut write_half: FramedWrite<tokio::io::WriteHalf<SslStream<S>>, Codec>,
+        mut write_half: FramedWrite<tokio::io::WriteHalf<Pin<&mut SslStream<S>>>, Codec>,
         mut close_receiver: tokio::sync::watch::Receiver<()>,
     ) where
         S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
@@ -102,7 +105,7 @@ impl Connection {
                         Some(f) => f,
                         None => return,
                     },
-                    _ = close_receiver.recv().fuse() => return
+                    _ = close_receiver.changed().fuse() => return
                 };
                 if let Err(err) = write_half.send(frame).await {
                     return warn!("Error forwarding frame: {}", err);
@@ -115,12 +118,9 @@ impl Connection {
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(15));
             loop {
-                let next = futures_util::select! {
-                    next = interval.next().fuse() => next,
-                    _ = close_receiver.recv().fuse() => return,
-                };
-                if next.is_none() {
-                    return info!("Stop ping task");
+                futures_util::select! {
+                    _ = interval.tick().fuse() => (),
+                    _ = close_receiver.changed().fuse() => return,
                 };
                 connection.send_frame(Frame::Ping).await;
             }

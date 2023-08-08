@@ -1,21 +1,21 @@
-use std::io::{Error, ErrorKind, Result};
-use serde::Serialize;
-use rmp_serde::{from_slice, Serializer};
-use bytes::{Buf, BytesMut};
-use tokio_util::codec::{Decoder, Encoder};
 use crate::Identifier;
+use bytes::{Buf, BytesMut};
+use rmp_serde::{from_slice, Serializer};
+use serde::Serialize;
+use std::io::{Error, ErrorKind, Result};
+use tokio_util::codec::{Decoder, Encoder};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ErrorCode {
     NetworkUnreachable,
-    NotBound
+    NotBound,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Frame {
     Bind(u16),
     Data(Identifier, u16, Vec<u8>),
-    Error(ErrorCode)
+    Error(ErrorCode),
 }
 
 pub struct ControlProtocolCodec;
@@ -45,8 +45,7 @@ impl Decoder for ControlProtocolCodec {
     }
 }
 
-impl Encoder for ControlProtocolCodec {
-    type Item = Frame;
+impl Encoder<Frame> for ControlProtocolCodec {
     type Error = Error;
 
     fn encode(&mut self, msg: Frame, buf: &mut BytesMut) -> Result<()> {

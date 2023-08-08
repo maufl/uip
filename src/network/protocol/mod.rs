@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use rmp_serde::{Deserializer, Serializer};
 use rmp_serde::encode::Error as EncodeError;
-use bytes::{BytesMut, Bytes, buf::BufMutExt};
+use bytes::{BytesMut, Bytes, BufMut};
 
 use crate::data::{Peer, Identifier};
 
@@ -14,9 +14,8 @@ pub enum Message {
 
 impl Message {
     pub fn serialize_to_msgpck(&self, buffer: BytesMut) -> Result<BytesMut, EncodeError> {
-        let mut writer = buffer.writer();
-        self.serialize(&mut Serializer::new(&mut writer))?;
-        Ok(writer.into_inner())
+        self.serialize(&mut Serializer::new(&mut buffer.writer()))?;
+        Ok(buffer)
     }
 
     pub fn deserialize_from_msgpck(buffer: &Bytes) -> Message {

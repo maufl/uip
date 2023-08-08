@@ -3,10 +3,10 @@ use openssl::ssl::{SslAcceptor, SslConnector, SslMethod, SslVerifyMode};
 use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddrV6;
+use std::pin::Pin;
 use std::string::ToString;
 use tokio;
-use tokio::prelude::*;
-use tokio::stream::StreamExt;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc::Sender;
 use tokio_openssl::SslStream;
 
@@ -71,19 +71,24 @@ impl Shared<Socket> {
         mut incomming_connections: tokio::sync::mpsc::Receiver<crate::network::io::Connection>,
     ) -> Result<(), openssl::error::ErrorStack> {
         let acceptor = acceptor_for_id(&self.read().id)?;
+        let ssl = openssl::ssl::Ssl::new(acceptor.context())?;
         let socket = self.clone();
         tokio::spawn(async move {
             loop {
-                let stream = match incomming_connections.next().await {
-                    Some(s) => s,
-                    None => return,
+                let Some(stream) = incomming_connections.recv().await else {
+                    return;
                 };
-                let ssl_stream = match tokio_openssl::accept(&acceptor, stream).await {
+                let mut ssl_stream = match tokio_openssl::SslStream::new(ssl, stream) {
                     Ok(s) => s,
-                    Err(err) => {
-                        warn!("Error performing TLS handshake: {}", err);
+                    Err(e) => {
+                        warn!("Error creating new SSL stream: {}", e);
                         continue;
                     }
+                };
+                let ssl_stream = Pin::new(&mut ssl_stream);
+                if let Err(err) = ssl_stream.accept().await {
+                    warn!("Error performing TLS handshake: {}", err);
+                    continue;
                 };
                 let id = match id_from_connection(&ssl_stream) {
                     Ok(id) => id,
@@ -128,17 +133,16 @@ impl Shared<Socket> {
                 ))
             }
         };
+        let ssl = connector.into_ssl(&identifier.to_string())?;
         let conn = self.read().io_socket.connect(address.into())?;
-        let ssl_stream =
-            match tokio_openssl::connect(connector, &identifier.to_string(), conn).await {
-                Ok(s) => s,
-                Err(err) => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::ConnectionAborted,
-                        format!("TLS handshake error: {}", err),
-                    ))
-                }
-            };
+        let mut ssl_stream = tokio_openssl::SslStream::new(ssl, conn)?;
+        let ssl_stream = Pin::new(&mut ssl_stream);
+        if let Err(err) = ssl_stream.connect().await {
+            return Err(io::Error::new(
+                io::ErrorKind::ConnectionAborted,
+                format!("TLS handshake error: {}", err),
+            ));
+        };
         let conn =
             Connection::from_tls_stream(ssl_stream, identifier, self.read().deliver_frame.clone());
         Ok(conn)

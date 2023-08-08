@@ -4,16 +4,17 @@ use std::io;
 use std::net::SocketAddrV6;
 use std::time::Duration;
 use tokio;
-use tokio::stream::StreamExt;
 use tokio::sync::mpsc::Sender;
+use tokio_stream::StreamExt;
 
 use crate::data::{Peer, PeerInformationBase};
-use crate::network::change::Listener;
 use crate::network::discovery::discover_addresses;
 use crate::network::protocol::Message;
 use crate::network::transport::{Connection, Socket};
 use crate::network::LocalAddress;
 use crate::{Identifier, Identity, Shared};
+
+use super::change::listen;
 
 #[derive(Clone)]
 pub struct NetworkState {
@@ -134,7 +135,7 @@ impl Shared<NetworkState> {
         let state = self.clone();
         tokio::spawn(async move {
             loop {
-                let (id, src_port, dst_port, data) = match data_receiver.next().await {
+                let (id, src_port, dst_port, data) = match data_receiver.recv().await {
                     Some(frame) => frame,
                     None => return info!("All frame senders for socket closed"),
                 };
@@ -145,14 +146,13 @@ impl Shared<NetworkState> {
     }
 
     async fn observe_network_changes(&self) -> Result<(), ()> {
-        let listener = match Listener::new() {
+        let mut change_stream = match listen(Duration::from_millis(2000)) {
             Ok(l) => l,
             Err(err) => {
                 warn!("Unable to listen for network changes: {}", err);
                 return Err(());
             }
         };
-        let mut change_stream = listener.debounce(Duration::from_millis(2000));
         while change_stream.next().await.is_some() {
             info!("Network changed");
             self.open_new_sockets().await;
@@ -236,7 +236,7 @@ impl Shared<NetworkState> {
         if src_port == 0 && dst_port == 0 {
             return self.process_control_message(host_id, data).await;
         }
-        let mut upstream = self.write().upstream.clone();
+        let upstream = self.write().upstream.clone();
         if let Err(err) = upstream.send((host_id, src_port, dst_port, data)).await {
             warn!("Failed to pass message to upstream: {}", err);
         }

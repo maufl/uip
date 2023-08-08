@@ -1,17 +1,15 @@
-use std::io::{Error, ErrorKind, Result};
-use std::task::{Context, Poll};
+use std::io::{self, Error, ErrorKind, Result};
+use std::os::fd::RawFd;
 use std::pin::Pin;
+use std::task::{Context, Poll};
 
+use futures_util::ready;
 use nix;
-use nix::sys::socket::{bind, socket, AddressFamily, MsgFlags, SockAddr, SockType, SockFlag};
-use nix::unistd::Pid;
 use nix::pty::SessionId;
-use bytes::BytesMut;
-use tokio::io::PollEvented;
-use tokio::stream::Stream;
-use mio::Ready;
-
-use crate::network::change::evented_socket::EventedSocket;
+use nix::sys::socket::{bind, recv, socket, AddressFamily, MsgFlags, SockAddr, SockFlag, SockType};
+use nix::unistd::Pid;
+use tokio::io::unix::AsyncFd;
+use tokio::io::{AsyncRead, ReadBuf};
 
 fn nix_error_to_io_error(err: nix::Error) -> Error {
     match err {
@@ -21,7 +19,7 @@ fn nix_error_to_io_error(err: nix::Error) -> Error {
 }
 
 pub struct RTNetlinkSocket {
-    io: PollEvented<EventedSocket>,
+    async_fd: AsyncFd<RawFd>,
 }
 
 impl RTNetlinkSocket {
@@ -33,30 +31,32 @@ impl RTNetlinkSocket {
         let pid = SessionId::from(Pid::this()) as u32;
         let addr = SockAddr::new_netlink(pid, groups);
         bind(sock, &addr).map_err(nix_error_to_io_error)?;
-        let io = PollEvented::new(EventedSocket::from(sock))?;
-        Ok(RTNetlinkSocket { io: io })
-    }
 
+        Ok(RTNetlinkSocket {
+            async_fd: AsyncFd::new(sock)?,
+        })
+    }
 }
 
-impl Stream for RTNetlinkSocket {
-    type Item = Result<BytesMut>;
+impl AsyncRead for RTNetlinkSocket {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        loop {
+            let mut guard = ready!(self.async_fd.poll_read_ready(cx))?;
 
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Result<BytesMut>>> {
-        if let Poll::Pending = self.io.poll_read_ready(cx, Ready::readable()) {
-            return Poll::Pending;
-        }
-        let mut buf = BytesMut::new();
-        buf.resize(4096, 0u8);
-        match self.io.get_ref().recv(&mut buf, MsgFlags::empty()) {
-            Ok(n) => Poll::Ready(Some(Ok(buf.split_to(n)))),
-            Err(err) => {
-                if err.kind() == ErrorKind::WouldBlock {
-                    self.io.clear_read_ready(cx, mio::Ready::readable())?;
-                    Poll::Pending
-                } else {
-                    Poll::Ready(Some(Err(err)))
+            let unfilled = buf.initialize_unfilled();
+            match guard.try_io(|inner| {
+                recv(*inner.get_ref(), unfilled, MsgFlags::empty()).map_err(nix_error_to_io_error)
+            }) {
+                Ok(Ok(len)) => {
+                    buf.advance(len);
+                    return Poll::Ready(Ok(()));
                 }
+                Ok(Err(err)) => return Poll::Ready(Err(err)),
+                Err(_would_block) => continue,
             }
         }
     }

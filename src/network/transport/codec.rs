@@ -15,8 +15,7 @@ pub enum Frame {
 
 pub struct Codec();
 
-impl Encoder for Codec {
-    type Item = Frame;
+impl Encoder<Frame> for Codec {
     type Error = Error;
 
     fn encode(&mut self, item: Frame, dst: &mut BytesMut) -> Result<(), Error> {

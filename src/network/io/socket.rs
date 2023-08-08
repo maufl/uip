@@ -3,8 +3,9 @@ use futures::future::FutureExt;
 use std::collections::HashMap;
 use std::io::Result;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use tokio;
-use tokio::net::{udp, UdpSocket};
+use tokio::net::UdpSocket;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 
@@ -23,9 +24,8 @@ pub struct Socket {
 
 impl Shared<Socket> {
     pub async fn bind(addr: LocalAddress) -> Result<(Shared<Socket>, Receiver<Connection>)> {
-        let socket = UdpSocket::bind(&addr.address).await?;
-        let upd_address = socket.local_addr()?;
-        let (udp_receive_half, udp_send_half) = socket.split();
+        let upd_socket = Arc::new(UdpSocket::bind(&addr.address).await?);
+        let upd_address = upd_socket.local_addr()?;
         let (connection_sender, connection_receiver) = channel::<Connection>(10);
         let (data_sender, data_receiver) = channel::<(SocketAddr, Bytes)>(10);
         let (close_sender, close_receiver) = broadcast::channel::<()>(1);
@@ -37,14 +37,14 @@ impl Shared<Socket> {
             upd_address: upd_address,
             close_sender: close_sender,
         });
-        socket.spawn_read_task(udp_receive_half, connection_sender, close_receiver);
-        socket.spawn_write_task(udp_send_half, data_receiver, second_close_receiver);
+        socket.spawn_read_task(upd_socket.clone(), connection_sender, close_receiver);
+        socket.spawn_write_task(upd_socket, data_receiver, second_close_receiver);
         Ok((socket, connection_receiver))
     }
 
     fn spawn_read_task(
         &self,
-        mut udp_receive_half: udp::RecvHalf,
+        mut udp_receive_half: Arc<UdpSocket>,
         mut connection_sender: Sender<Connection>,
         mut close_receiver: broadcast::Receiver<()>,
     ) {
@@ -78,7 +78,7 @@ impl Shared<Socket> {
 
     fn spawn_write_task(
         &self,
-        mut udp_send_half: udp::SendHalf,
+        mut udp_send_half: Arc<UdpSocket>,
         mut data_receiver: Receiver<(SocketAddr, Bytes)>,
         mut close_receiver: broadcast::Receiver<()>,
     ) {
@@ -118,7 +118,7 @@ impl Shared<Socket> {
         buf: Bytes,
         remote: SocketAddr,
     ) -> Option<Connection> {
-        let (mut destination, connection) =
+        let (destination, connection) =
             if let Some(dest) = self.read().connections.get(&remote).cloned() {
                 (dest, None)
             } else {
