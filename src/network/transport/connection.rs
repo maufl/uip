@@ -1,7 +1,6 @@
 use bytes::{Bytes, BytesMut};
 use futures::FutureExt;
 use futures_util::SinkExt;
-use std::pin::Pin;
 use std::time::Duration;
 use tokio;
 use tokio::io::{split, AsyncRead, AsyncWrite};
@@ -24,7 +23,7 @@ pub struct Connection {
 
 impl Connection {
     pub fn from_tls_stream<S>(
-        stream: Pin<&mut SslStream<S>>,
+        stream: SslStream<S>,
         remote_id: Identifier,
         data_sink: Sender<(Identifier, u16, u16, Bytes)>,
     ) -> Connection
@@ -46,9 +45,9 @@ impl Connection {
     fn spawn_read_task<S>(
         &self,
         remote_id: Identifier,
-        mut read_half: FramedRead<tokio::io::ReadHalf<Pin<&mut SslStream<S>>>, Codec>,
-        mut data_sink: Sender<(Identifier, u16, u16, Bytes)>,
-        mut close_sender: tokio::sync::watch::Sender<()>,
+        mut read_half: FramedRead<tokio::io::ReadHalf<SslStream<S>>, Codec>,
+        data_sink: Sender<(Identifier, u16, u16, Bytes)>,
+        close_sender: tokio::sync::watch::Sender<()>,
     ) where
         S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
     {
@@ -93,7 +92,7 @@ impl Connection {
     fn spawn_write_task<S>(
         &self,
         mut receiver: Receiver<Frame>,
-        mut write_half: FramedWrite<tokio::io::WriteHalf<Pin<&mut SslStream<S>>>, Codec>,
+        mut write_half: FramedWrite<tokio::io::WriteHalf<SslStream<S>>, Codec>,
         mut close_receiver: tokio::sync::watch::Receiver<()>,
     ) where
         S: AsyncRead + AsyncWrite + Send + Unpin + 'static,

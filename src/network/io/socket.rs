@@ -44,8 +44,8 @@ impl Shared<Socket> {
 
     fn spawn_read_task(
         &self,
-        mut udp_receive_half: Arc<UdpSocket>,
-        mut connection_sender: Sender<Connection>,
+        udp_receive_half: Arc<UdpSocket>,
+        connection_sender: Sender<Connection>,
         mut close_receiver: broadcast::Receiver<()>,
     ) {
         let socket = self.clone();
@@ -78,7 +78,7 @@ impl Shared<Socket> {
 
     fn spawn_write_task(
         &self,
-        mut udp_send_half: Arc<UdpSocket>,
+        udp_send_half: Arc<UdpSocket>,
         mut data_receiver: Receiver<(SocketAddr, Bytes)>,
         mut close_receiver: broadcast::Receiver<()>,
     ) {

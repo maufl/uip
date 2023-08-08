@@ -71,12 +71,15 @@ impl Shared<Socket> {
         mut incomming_connections: tokio::sync::mpsc::Receiver<crate::network::io::Connection>,
     ) -> Result<(), openssl::error::ErrorStack> {
         let acceptor = acceptor_for_id(&self.read().id)?;
-        let ssl = openssl::ssl::Ssl::new(acceptor.context())?;
         let socket = self.clone();
         tokio::spawn(async move {
             loop {
                 let Some(stream) = incomming_connections.recv().await else {
                     return;
+                };
+                let Ok(ssl) = openssl::ssl::Ssl::new(acceptor.context()) else {
+                    warn!("Error creating SSL context");
+                    continue;
                 };
                 let mut ssl_stream = match tokio_openssl::SslStream::new(ssl, stream) {
                     Ok(s) => s,
@@ -85,8 +88,8 @@ impl Shared<Socket> {
                         continue;
                     }
                 };
-                let ssl_stream = Pin::new(&mut ssl_stream);
-                if let Err(err) = ssl_stream.accept().await {
+                let pinned_ssl_stream = Pin::new(&mut ssl_stream);
+                if let Err(err) = pinned_ssl_stream.accept().await {
                     warn!("Error performing TLS handshake: {}", err);
                     continue;
                 };
@@ -136,8 +139,8 @@ impl Shared<Socket> {
         let ssl = connector.into_ssl(&identifier.to_string())?;
         let conn = self.read().io_socket.connect(address.into())?;
         let mut ssl_stream = tokio_openssl::SslStream::new(ssl, conn)?;
-        let ssl_stream = Pin::new(&mut ssl_stream);
-        if let Err(err) = ssl_stream.connect().await {
+        let pinned_ssl_stream = Pin::new(&mut ssl_stream);
+        if let Err(err) = pinned_ssl_stream.connect().await {
             return Err(io::Error::new(
                 io::ErrorKind::ConnectionAborted,
                 format!("TLS handshake error: {}", err),

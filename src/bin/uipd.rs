@@ -2,17 +2,12 @@
 extern crate log;
 
 use uip::Configuration;
-use uip::{Identity, Identifier};
-use uip::{
-    PeerInformationBase,
-    NetworkState,
-    UnixState
-};
+use uip::{Identifier, Identity};
+use uip::{NetworkState, PeerInformationBase, UnixState};
 
-use std::path::Path;
 use bytes::Bytes;
 use clap::{App, Arg, SubCommand};
-use futures_util::StreamExt;
+use std::path::Path;
 
 #[tokio::main]
 async fn main() {
@@ -51,32 +46,43 @@ async fn main() {
         config.port = 0xfe11;
     }
 
-    let (network_sink, mut network_source) = tokio::sync::mpsc::channel::<(Identifier, u16, u16, Bytes)>(5);
-    let (unix_sink, mut unix_source) = tokio::sync::mpsc::channel::<(Identifier, u16, u16, Bytes)>(5);
-    let network =  NetworkState::new(
-            config.id.clone(),
-            config.pib,
-            config.relays,
-            config.port,
-            network_sink,
-    ).shared();
+    let (network_sink, mut network_source) =
+        tokio::sync::mpsc::channel::<(Identifier, u16, u16, Bytes)>(5);
+    let (unix_sink, mut unix_source) =
+        tokio::sync::mpsc::channel::<(Identifier, u16, u16, Bytes)>(5);
+    let network = NetworkState::new(
+        config.id.clone(),
+        config.pib,
+        config.relays,
+        config.port,
+        network_sink,
+    )
+    .shared();
     let network_clone = network.clone();
 
     let unix = UnixState::new(config.ctl_socket, unix_sink).shared();
     let unix_clone = unix.clone();
 
-    tokio::spawn(async move { 
+    tokio::spawn(async move {
         loop {
-            match network_source.next().await {
-                Some((host_id, src_port, dst_port, data)) => unix_clone.deliver_frame(host_id, src_port, dst_port, data).await,
+            match network_source.recv().await {
+                Some((host_id, src_port, dst_port, data)) => {
+                    unix_clone
+                        .deliver_frame(host_id, src_port, dst_port, data)
+                        .await
+                }
                 None => break,
             }
         }
     });
     tokio::spawn(async move {
         loop {
-            match unix_source.next().await {
-                Some((host_id, src_port, dst_port, data)) => network_clone.send_frame(host_id, src_port, dst_port, data).await,
+            match unix_source.recv().await {
+                Some((host_id, src_port, dst_port, data)) => {
+                    network_clone
+                        .send_frame(host_id, src_port, dst_port, data)
+                        .await
+                }
                 None => break,
             }
         }
@@ -99,12 +105,12 @@ async fn main() {
         warn!("Unable to listen for CTRL-C signal: {}", err);
     }
 
-    let config = Configuration{
+    let config = Configuration {
         id: config.id,
         pib: network.read().pib.clone(),
         relays: network.read().relays.clone(),
         port: network.read().port,
-        ctl_socket: unix.read().ctl_socket.clone()
+        ctl_socket: unix.read().ctl_socket.clone(),
     };
     let _ = write_configuration(config_file_path, &config);
 }
@@ -124,15 +130,14 @@ fn app() -> App<'static, 'static> {
 
 fn generate_configuration(config_file_path: &str) {
     let id = Identity::generate().expect("Unable to generate an ID");
-    let config = Configuration{
+    let config = Configuration {
         id: id.clone(),
         pib: PeerInformationBase::new(),
         relays: Vec::new(),
         port: 0,
-        ctl_socket: format!("/run/user/1000/{}.sock", &id.identifier)
+        ctl_socket: format!("/run/user/1000/{}.sock", &id.identifier),
     };
-    write_configuration(config_file_path, &config)
-        .unwrap_or_else(|err| error!("{}", err))
+    write_configuration(config_file_path, &config).unwrap_or_else(|err| error!("{}", err))
 }
 
 fn read_configuration(path: String) -> Result<Configuration, String> {
