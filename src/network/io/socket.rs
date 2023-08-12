@@ -84,7 +84,12 @@ impl Shared<Socket> {
     pub fn connect(&self, addr: SocketAddr) -> Result<Connection> {
         let (destination, source) = channel::<Bytes>(10);
         self.write().connections.insert(addr, destination);
-        Ok(Connection::new(self.read().inner.clone(), source, addr))
+        Ok(Connection::new(
+            self.read().inner.clone(),
+            source,
+            self.read().upd_address,
+            addr,
+        ))
     }
 
     async fn forward_or_new_connection(
@@ -97,7 +102,12 @@ impl Shared<Socket> {
                 (dest, None)
             } else {
                 let (destination, source) = channel::<Bytes>(10);
-                let conn = Connection::new(self.read().inner.clone(), source, remote);
+                let conn = Connection::new(
+                    self.read().inner.clone(),
+                    source,
+                    self.read().upd_address,
+                    remote,
+                );
                 (destination, Some(conn))
             };
         if destination.send(buf.into()).await.is_err() {
